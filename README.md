@@ -28,8 +28,9 @@ generated BLE/`trouble-host` stack remains initialized.
 The firmware has been flashed and its full-frame plus aligned partial-frame
 paths complete successfully on the physical board according to RTT/defmt.
 CO5300, CST9220, and AXP2101 initialization all succeed on the physical board.
-The UI, orientation, and colors have been verified on the AMOLED. A manual
-tap/coordinate pass for the new navigation is still pending.
+The UI, orientation, colors, CST9220 IRQ/coordinate mapping, press/release
+events, page navigation, and brightness controls have been verified on the
+physical AMOLED board.
 
 The AXP2101 setup intentionally changes no board-specific regulator rails. It
 only enables battery detection and the ADC channels used for telemetry.

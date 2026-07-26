@@ -16,6 +16,7 @@ use defmt::{error, info};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
+use embassy_sync::channel::Channel;
 use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer};
@@ -69,7 +70,7 @@ enum PmicEvent {
     Error,
 }
 
-static TOUCH_SIGNAL: Signal<CriticalSectionRawMutex, TouchState> = Signal::new();
+static TOUCH_EVENTS: Channel<CriticalSectionRawMutex, TouchState, 8> = Channel::new();
 static TOUCH_READY_SIGNAL: Signal<CriticalSectionRawMutex, bool> = Signal::new();
 static PMIC_SIGNAL: Signal<CriticalSectionRawMutex, PmicEvent> = Signal::new();
 static BRIGHTNESS_SIGNAL: Signal<CriticalSectionRawMutex, u8> = Signal::new();
@@ -114,23 +115,23 @@ async fn touch_task(
     TOUCH_READY_SIGNAL.signal(true);
 
     loop {
-        if !interrupt.is_low() {
-            interrupt.wait_for_falling_edge().await;
-        }
+        // CST9220 presents one report per falling edge. Reading repeatedly
+        // while INT is still low races the controller's ACK processing and can
+        // turn a valid press into an immediate empty report.
+        interrupt.wait_for_falling_edge().await;
 
         match touch.touches().await {
             Ok(points) => {
                 if let Some(point) = points[0] {
                     let (x, y) = display_coordinates(point);
-                    info!("Touch down at ({}, {})", x, y);
-                    TOUCH_SIGNAL.signal(TouchState::Pressed { x, y });
+                    TOUCH_EVENTS.send(TouchState::Pressed { x, y }).await;
                 } else {
-                    TOUCH_SIGNAL.signal(TouchState::Released);
+                    TOUCH_EVENTS.send(TouchState::Released).await;
                 }
             }
             Err(_) => {
                 error!("CST92xx read failed");
-                TOUCH_SIGNAL.signal(TouchState::Released);
+                TOUCH_EVENTS.send(TouchState::Released).await;
             }
         }
     }
@@ -343,9 +344,14 @@ async fn main(spawner: Spawner) -> ! {
             });
         }
 
-        if let Some(state) = TOUCH_SIGNAL.try_take() {
+        while let Ok(state) = TOUCH_EVENTS.try_receive() {
             if let TouchState::Pressed { x, y } = state {
+                if last_touch_position.is_none() {
+                    info!("Touch down at ({}, {})", x, y);
+                }
                 ui.set_touch_status(format!("touch {},{}", x, y).into());
+            } else if last_touch_position.is_some() {
+                info!("Touch released");
             }
             dispatch_touch_state(&slint_window, &mut last_touch_position, state);
         }
