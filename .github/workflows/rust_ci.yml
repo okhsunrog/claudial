@@ -17,6 +17,9 @@ jobs:
   rust-checks:
     name: Rust Checks
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: firmware
     strategy:
       fail-fast: false
       matrix:
@@ -28,8 +31,16 @@ jobs:
           - command: clippy
             args: --all-features --workspace -- -D warnings
     steps:
-      - name: Checkout repository
+      - name: Checkout firmware
         uses: actions/checkout@v6
+        with:
+          path: firmware
+      - name: Checkout Slint alignment branch
+        uses: actions/checkout@v6
+        with:
+          repository: okhsunrog/slint
+          ref: dirty-region-alignment
+          path: slint
       - name: Setup Rust
         uses: esp-rs/xtensa-toolchain@v1.5
         with:
@@ -38,5 +49,7 @@ jobs:
           ldproxy: false
       - name: Enable caching
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: firmware -> target
       - name: Run command
         run: cargo ${{ matrix.action.command }} ${{ matrix.action.args }}

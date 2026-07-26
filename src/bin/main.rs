@@ -11,26 +11,36 @@ use alloc::boxed::Box;
 use alloc::format;
 use alloc::vec;
 use bt_hci::controller::ExternalController;
-use defmt::info;
+use cst92xx::CST92xx;
+use defmt::{error, info};
+use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
+use embassy_sync::mutex::Mutex;
+use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer};
 use esp_hal::clock::CpuClock;
 use esp_hal::delay::Delay;
 use esp_hal::dma::{DmaRxBuf, DmaTxBuf};
 use esp_hal::dma_buffers;
-use esp_hal::gpio::{Level, Output, OutputConfig};
+use esp_hal::gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull};
+use esp_hal::i2c::master::{Config as I2cConfig, I2c};
 use esp_hal::spi::Mode;
 use esp_hal::spi::master::{Config as SpiConfig, Spi};
 use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
 use esp_radio::ble::controller::BleConnector;
 use panic_rtt_target as _;
+use slint::PhysicalPosition;
 use slint::platform::software_renderer::{
     DirtyRegionAlignment, MinimalSoftwareWindow, RepaintBufferType, Rgb565BigEndianPixel,
 };
+use slint::platform::{PointerEventButton, WindowEvent};
+use static_cell::StaticCell;
 use trouble_host::prelude::*;
 use waveshare_esp32s3_amoled_2_16::board::{DISPLAY_HEIGHT, DISPLAY_SPI_MHZ, DISPLAY_WIDTH};
 use waveshare_esp32s3_amoled_2_16::co5300::Co5300;
+use waveshare_esp32s3_amoled_2_16::pmic::{self, PmicStats};
 use waveshare_esp32s3_amoled_2_16::slint_platform::EspPlatform;
 
 extern crate alloc;
@@ -42,6 +52,155 @@ const L2CAP_CHANNELS_MAX: usize = 1;
 const DISPLAY_WIDTH_USIZE: usize = DISPLAY_WIDTH as usize;
 const FRAMEBUFFER_PIXELS: usize = DISPLAY_WIDTH_USIZE * DISPLAY_HEIGHT as usize;
 const DISPLAY_DMA_BUFFER_SIZE: usize = DISPLAY_WIDTH_USIZE * 8 * 2;
+const DEFAULT_BRIGHTNESS_PERCENT: u8 = 80;
+const MINIMUM_BRIGHTNESS_PERCENT: u8 = 5;
+
+type SharedI2cBus = Mutex<NoopRawMutex, I2c<'static, esp_hal::Async>>;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TouchState {
+    Released,
+    Pressed { x: u16, y: u16 },
+}
+
+#[derive(Clone, Copy)]
+enum PmicEvent {
+    Online(PmicStats),
+    Error,
+}
+
+static TOUCH_SIGNAL: Signal<CriticalSectionRawMutex, TouchState> = Signal::new();
+static TOUCH_READY_SIGNAL: Signal<CriticalSectionRawMutex, bool> = Signal::new();
+static PMIC_SIGNAL: Signal<CriticalSectionRawMutex, PmicEvent> = Signal::new();
+static BRIGHTNESS_SIGNAL: Signal<CriticalSectionRawMutex, u8> = Signal::new();
+
+fn brightness_register(percent: u8) -> u8 {
+    let percent = percent.clamp(MINIMUM_BRIGHTNESS_PERCENT, 100);
+    ((u16::from(percent) * u16::from(u8::MAX) + 50) / 100) as u8
+}
+
+fn display_coordinates(point: cst92xx::Point) -> (u16, u16) {
+    // The official Waveshare demo applies setSwapXY(true) followed by
+    // setMirrorXY(true, false) for the panel's 0-degree orientation.
+    let x = DISPLAY_WIDTH
+        .saturating_sub(1)
+        .saturating_sub(point.y.min(DISPLAY_WIDTH.saturating_sub(1)));
+    let y = point.x.min(DISPLAY_HEIGHT.saturating_sub(1));
+    (x, y)
+}
+
+#[embassy_executor::task]
+#[allow(
+    clippy::large_stack_frames,
+    reason = "Embassy stores the async task state statically rather than on the runtime call stack"
+)]
+async fn touch_task(
+    i2c_bus: &'static SharedI2cBus,
+    mut interrupt: Input<'static>,
+    mut reset: Output<'static>,
+) {
+    reset.set_low();
+    Timer::after(Duration::from_millis(10)).await;
+    reset.set_high();
+    Timer::after(Duration::from_millis(30)).await;
+
+    let mut touch = CST92xx::new(I2cDevice::new(i2c_bus));
+    if touch.init().await.is_err() {
+        error!("CST92xx initialization failed");
+        TOUCH_READY_SIGNAL.signal(false);
+        return;
+    }
+    info!("{} touch controller initialized", touch.model_name());
+    TOUCH_READY_SIGNAL.signal(true);
+
+    loop {
+        if !interrupt.is_low() {
+            interrupt.wait_for_falling_edge().await;
+        }
+
+        match touch.touches().await {
+            Ok(points) => {
+                if let Some(point) = points[0] {
+                    let (x, y) = display_coordinates(point);
+                    info!("Touch down at ({}, {})", x, y);
+                    TOUCH_SIGNAL.signal(TouchState::Pressed { x, y });
+                } else {
+                    TOUCH_SIGNAL.signal(TouchState::Released);
+                }
+            }
+            Err(_) => {
+                error!("CST92xx read failed");
+                TOUCH_SIGNAL.signal(TouchState::Released);
+            }
+        }
+    }
+}
+
+#[embassy_executor::task]
+#[allow(
+    clippy::large_stack_frames,
+    reason = "Embassy stores the async task state statically rather than on the runtime call stack"
+)]
+async fn pmic_task(i2c_bus: &'static SharedI2cBus) {
+    let mut axp = match pmic::init(I2cDevice::new(i2c_bus)).await {
+        Ok(axp) => axp,
+        Err(_) => {
+            error!("AXP2101 initialization failed");
+            PMIC_SIGNAL.signal(PmicEvent::Error);
+            return;
+        }
+    };
+    info!("AXP2101 initialized for telemetry");
+
+    let mut first_sample = true;
+    loop {
+        match pmic::read_stats(&mut axp).await {
+            Ok(stats) => {
+                if first_sample {
+                    first_sample = false;
+                    info!("AXP2101 first telemetry sample: {}", stats);
+                }
+                PMIC_SIGNAL.signal(PmicEvent::Online(stats));
+            }
+            Err(_) => {
+                error!("AXP2101 telemetry read failed");
+                PMIC_SIGNAL.signal(PmicEvent::Error);
+            }
+        }
+        Timer::after(Duration::from_secs(1)).await;
+    }
+}
+
+fn dispatch_touch_state(
+    window: &MinimalSoftwareWindow,
+    last_position: &mut Option<slint::LogicalPosition>,
+    state: TouchState,
+) {
+    match state {
+        TouchState::Pressed { x, y } => {
+            let position =
+                PhysicalPosition::new(i32::from(x), i32::from(y)).to_logical(window.scale_factor());
+            let event = match last_position.replace(position) {
+                Some(previous) if previous != position => WindowEvent::PointerMoved { position },
+                Some(_) => return,
+                None => WindowEvent::PointerPressed {
+                    position,
+                    button: PointerEventButton::Left,
+                },
+            };
+            window.dispatch_event(event);
+        }
+        TouchState::Released => {
+            if let Some(position) = last_position.take() {
+                window.dispatch_event(WindowEvent::PointerReleased {
+                    position,
+                    button: PointerEventButton::Left,
+                });
+                window.dispatch_event(WindowEvent::PointerExited);
+            }
+        }
+    }
+}
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -87,7 +246,23 @@ async fn main(spawner: Spawner) -> ! {
 
     // BLE is intentionally kept from the generated template. Its application
     // task and GATT services will be added after the display/touch bring-up.
-    let _ = spawner;
+    let i2c = I2c::new(
+        peripherals.I2C0,
+        I2cConfig::default().with_frequency(Rate::from_khz(400)),
+    )
+    .unwrap()
+    .with_sda(peripherals.GPIO15)
+    .with_scl(peripherals.GPIO14)
+    .into_async();
+    static I2C_BUS: StaticCell<SharedI2cBus> = StaticCell::new();
+    let i2c_bus = I2C_BUS.init(Mutex::new(i2c));
+    let touch_interrupt = Input::new(
+        peripherals.GPIO11,
+        InputConfig::default().with_pull(Pull::Up),
+    );
+    let touch_reset = Output::new(peripherals.GPIO40, Level::High, OutputConfig::default());
+    spawner.spawn(touch_task(i2c_bus, touch_interrupt, touch_reset).unwrap());
+    spawner.spawn(pmic_task(i2c_bus).unwrap());
 
     let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) =
         dma_buffers!(DISPLAY_DMA_BUFFER_SIZE);
@@ -119,7 +294,9 @@ async fn main(spawner: Spawner) -> ! {
         DISPLAY_HEIGHT,
     );
     display.init(&mut Delay::new()).unwrap();
-    display.set_brightness(0xd0).unwrap();
+    display
+        .set_brightness(brightness_register(DEFAULT_BRIGHTNESS_PERCENT))
+        .unwrap();
     info!("CO5300 initialized");
 
     // This allocation is larger than the internal heap and therefore lands in
@@ -136,12 +313,88 @@ async fn main(spawner: Spawner) -> ! {
 
     let ui = MainWindow::new().unwrap();
     ui.set_ble_status("initialized".into());
+    ui.set_brightness_percent(i32::from(DEFAULT_BRIGHTNESS_PERCENT));
+    let ui_weak = ui.as_weak();
+    ui.on_brightness_step(move |delta| {
+        if let Some(ui) = ui_weak.upgrade() {
+            let brightness = (ui.get_brightness_percent() + delta)
+                .clamp(i32::from(MINIMUM_BRIGHTNESS_PERCENT), 100);
+            ui.set_brightness_percent(brightness);
+            BRIGHTNESS_SIGNAL.signal(brightness as u8);
+        }
+    });
     let started_at = Instant::now();
     let mut displayed_second = u64::MAX;
     let mut rendered_frames = 0_u32;
+    let mut last_touch_position = None;
+    let mut touch_ready = false;
+    let mut pmic_ready = false;
+    let mut application_ready_logged = false;
 
     loop {
         slint::platform::update_timers_and_animations();
+
+        if let Some(ready) = TOUCH_READY_SIGNAL.try_take() {
+            touch_ready = ready;
+            ui.set_touch_status(if ready {
+                "CST9220 ready".into()
+            } else {
+                "touch error".into()
+            });
+        }
+
+        if let Some(state) = TOUCH_SIGNAL.try_take() {
+            if let TouchState::Pressed { x, y } = state {
+                ui.set_touch_status(format!("touch {},{}", x, y).into());
+            }
+            dispatch_touch_state(&slint_window, &mut last_touch_position, state);
+        }
+
+        if let Some(event) = PMIC_SIGNAL.try_take() {
+            match event {
+                PmicEvent::Online(stats) => {
+                    pmic_ready = true;
+                    ui.set_pmic_status("AXP2101 online".into());
+                    ui.set_battery_level(if stats.battery_present {
+                        format!("{}%", stats.state_of_charge).into()
+                    } else {
+                        "--".into()
+                    });
+                    ui.set_battery_voltage(if stats.battery_present {
+                        format!("{} mV", stats.battery_mv).into()
+                    } else {
+                        "not detected".into()
+                    });
+                    ui.set_vbus_voltage(if stats.vbus_good {
+                        format!("{} mV", stats.vbus_mv).into()
+                    } else {
+                        "disconnected".into()
+                    });
+                    ui.set_vsys_voltage(format!("{} mV", stats.vsys_mv).into());
+                    ui.set_pmic_temperature(format!("{:.1} C", stats.temperature_c).into());
+                    ui.set_power_source(if stats.charging {
+                        "USB · charging".into()
+                    } else if stats.vbus_good {
+                        "USB power".into()
+                    } else if stats.battery_present {
+                        "Battery".into()
+                    } else {
+                        "No battery".into()
+                    });
+                }
+                PmicEvent::Error => {
+                    ui.set_pmic_status("telemetry error".into());
+                }
+            }
+        }
+
+        if let Some(percent) = BRIGHTNESS_SIGNAL.try_take() {
+            if display.set_brightness(brightness_register(percent)).is_ok() {
+                info!("Display brightness set to {}%", percent);
+            } else {
+                error!("Display brightness update failed");
+            }
+        }
 
         let elapsed_seconds = started_at.elapsed().as_secs();
         if elapsed_seconds != displayed_second {
@@ -163,6 +416,11 @@ async fn main(spawner: Spawner) -> ! {
             } else if rendered_frames == 2 {
                 info!("First partial Slint frame rendered");
             }
+        }
+
+        if !application_ready_logged && touch_ready && pmic_ready && rendered_frames >= 2 {
+            application_ready_logged = true;
+            info!("Application ready for touch validation");
         }
 
         Timer::after(Duration::from_millis(16)).await;

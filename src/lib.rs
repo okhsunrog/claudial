@@ -2,4 +2,5 @@
 
 pub mod board;
 pub mod co5300;
+pub mod pmic;
 pub mod slint_platform;

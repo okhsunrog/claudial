@@ -1,29 +1,143 @@
-component InfoCard inherits Rectangle {
+component MetricCard inherits Rectangle {
     in property <string> title;
     in property <string> value;
+    in property <string> detail: "";
     in property <color> accent: #5de4c7;
 
-    height: 92px;
     background: #0d141b;
     border-color: #1d2a34;
     border-width: 1px;
     border-radius: 14px;
 
-    VerticalLayout {
-        padding: 14px;
-        spacing: 7px;
+    Text {
+        x: 14px;
+        y: 12px;
+        text: root.title;
+        color: #6f8292;
+        font-size: 12px;
+        font-weight: 600;
+    }
 
-        Text {
-            text: root.title;
-            color: #6f8292;
-            font-size: 13px;
+    Text {
+        x: 14px;
+        y: 35px;
+        text: root.value;
+        color: root.accent;
+        font-size: 19px;
+        font-weight: 700;
+    }
+
+    Text {
+        x: 14px;
+        y: 62px;
+        text: root.detail;
+        color: #526270;
+        font-size: 10px;
+    }
+}
+
+component MenuCard inherits Rectangle {
+    in property <string> title;
+    in property <string> value;
+    in property <string> action;
+    in property <color> accent: #5de4c7;
+    callback clicked();
+
+    background: menu-touch.pressed ? #14212b : #0d141b;
+    border-color: menu-touch.pressed ? root.accent : #1d2a34;
+    border-width: 1px;
+    border-radius: 14px;
+
+    Text {
+        x: 14px;
+        y: 12px;
+        text: root.title;
+        color: #6f8292;
+        font-size: 12px;
+        font-weight: 600;
+    }
+
+    Text {
+        x: 14px;
+        y: 35px;
+        text: root.value;
+        color: root.accent;
+        font-size: 18px;
+        font-weight: 700;
+    }
+
+    Text {
+        x: 14px;
+        y: 61px;
+        text: root.action;
+        color: #526270;
+        font-size: 10px;
+    }
+
+    Text {
+        x: root.width - 27px;
+        y: 32px;
+        text: ">";
+        color: root.accent;
+        font-size: 18px;
+        font-weight: 700;
+    }
+
+    menu-touch := TouchArea {
+        clicked => {
+            root.clicked();
         }
+    }
+}
 
-        Text {
-            text: root.value;
-            color: root.accent;
-            font-size: 20px;
-            font-weight: 600;
+component StepButton inherits Rectangle {
+    in property <string> label;
+    in property <color> accent: #5de4c7;
+    callback clicked();
+
+    background: step-touch.pressed ? root.accent : #0d141b;
+    border-color: root.accent;
+    border-width: 1px;
+    border-radius: 14px;
+
+    Text {
+        text: root.label;
+        color: step-touch.pressed ? #06110e : root.accent;
+        font-size: 20px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    step-touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+component NavButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> active;
+    callback clicked();
+
+    background: root.active ? #12372f : nav-touch.pressed ? #14212b : #080d12;
+    border-color: root.active ? #286c5b : #080d12;
+    border-width: 1px;
+    border-radius: 15px;
+
+    Text {
+        text: root.label;
+        color: root.active ? #8ff5dc : #687a89;
+        font-size: 11px;
+        font-weight: root.active ? 700 : 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    nav-touch := TouchArea {
+        clicked => {
+            root.clicked();
         }
     }
 }
@@ -31,158 +145,470 @@ component InfoCard inherits Rectangle {
 export component MainWindow inherits Window {
     in property <string> uptime: "0 s";
     in property <string> ble-status: "initialized";
+    in property <string> touch-status: "CST9220 starting";
+    in property <string> pmic-status: "AXP2101 probing";
+    in property <string> battery-level: "--";
+    in property <string> battery-voltage: "--";
+    in property <string> vbus-voltage: "--";
+    in property <string> vsys-voltage: "--";
+    in property <string> pmic-temperature: "--";
+    in property <string> power-source: "probing";
+    in-out property <int> brightness-percent: 80;
+    in-out property <int> current-page: 0;
+    callback brightness-step(int);
 
     width: 480px;
     height: 480px;
-    background: #05080c;
+    background: #000000;
 
-    VerticalLayout {
-        padding: 26px;
-        spacing: 18px;
+    Rectangle {
+        x: 32px;
+        y: 25px;
+        width: 416px;
+        height: 54px;
+        background: #000000;
 
-        HorizontalLayout {
-            spacing: 12px;
+        Text {
+            x: 0px;
+            y: 0px;
+            text: "WAVESHARE · ESP32-S3";
+            color: #5de4c7;
+            font-size: 12px;
+            font-weight: 700;
+        }
 
-            VerticalLayout {
-                spacing: 2px;
-                horizontal-stretch: 1;
-
-                Text {
-                    text: "WAVESHARE";
-                    color: #5de4c7;
-                    font-size: 13px;
-                    font-weight: 700;
-                }
-
-                Text {
-                    text: "ESP32-S3 AMOLED 2.16";
-                    color: #f3f7fa;
-                    font-size: 25px;
-                    font-weight: 700;
-                }
-            }
-
-            Rectangle {
-                width: 116px;
-                height: 32px;
-                background: #0d251e;
-                border-color: #1d5a48;
-                border-width: 1px;
-                border-radius: 16px;
-
-                HorizontalLayout {
-                    padding-left: 12px;
-                    padding-right: 12px;
-                    spacing: 8px;
-
-                    Rectangle {
-                        width: 8px;
-                        height: 8px;
-                        border-radius: 4px;
-                        background: #5de4c7;
-                    }
-
-                    Text {
-                        text: "DISPLAY";
-                        color: #8ff5dc;
-                        font-size: 12px;
-                        font-weight: 600;
-                        vertical-alignment: center;
-                    }
-                }
-            }
+        Text {
+            x: 0px;
+            y: 21px;
+            text: root.current-page == 0 ? "SYSTEM OVERVIEW" :
+                root.current-page == 1 ? "DISPLAY" : "POWER";
+            color: #f3f7fa;
+            font-size: 22px;
+            font-weight: 700;
         }
 
         Rectangle {
-            height: 112px;
+            x: 330px;
+            y: 7px;
+            width: 86px;
+            height: 30px;
+            background: #0d251e;
+            border-color: #1d5a48;
+            border-width: 1px;
+            border-radius: 15px;
+
+            Rectangle {
+                x: 13px;
+                y: 11px;
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: #5de4c7;
+            }
+
+            Text {
+                x: 28px;
+                text: "LIVE";
+                color: #8ff5dc;
+                font-size: 11px;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    if root.current-page == 0 : Rectangle {
+        x: 28px;
+        y: 92px;
+        width: 424px;
+        height: 306px;
+        background: #000000;
+
+        Rectangle {
+            x: 0px;
+            y: 0px;
+            width: 424px;
+            height: 94px;
             background: #0b1016;
             border-color: #1a2731;
             border-width: 1px;
             border-radius: 16px;
 
-            HorizontalLayout {
-                padding: 18px;
-                spacing: 18px;
+            Rectangle {
+                x: 16px;
+                y: 13px;
+                width: 68px;
+                height: 68px;
+                border-radius: 17px;
+                background: #5de4c7;
+
+                Text {
+                    text: "S3";
+                    color: #07110e;
+                    font-size: 26px;
+                    font-weight: 800;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            Text {
+                x: 101px;
+                y: 15px;
+                text: "CO5300 + CST9220";
+                color: #f3f7fa;
+                font-size: 20px;
+                font-weight: 700;
+            }
+
+            Text {
+                x: 101px;
+                y: 46px;
+                text: "480 × 480 · QSPI 40 MHz";
+                color: #82aaff;
+                font-size: 13px;
+                font-weight: 600;
+            }
+
+            Text {
+                x: 101px;
+                y: 68px;
+                text: root.touch-status;
+                color: #687a89;
+                font-size: 11px;
+            }
+        }
+
+        MenuCard {
+            x: 0px;
+            y: 106px;
+            width: 206px;
+            height: 86px;
+            title: "DISPLAY";
+            value: root.brightness-percent + "%";
+            action: "CO5300 brightness";
+            accent: #82aaff;
+            clicked => {
+                root.current-page = 1;
+            }
+        }
+
+        MenuCard {
+            x: 218px;
+            y: 106px;
+            width: 206px;
+            height: 86px;
+            title: "POWER";
+            value: root.battery-level;
+            action: root.pmic-status;
+            accent: #ffcb6b;
+            clicked => {
+                root.current-page = 2;
+            }
+        }
+
+        MetricCard {
+            x: 0px;
+            y: 204px;
+            width: 206px;
+            height: 92px;
+            title: "BLE STACK";
+            value: root.ble-status;
+            detail: "trouble-host retained";
+            accent: #c792ea;
+        }
+
+        MetricCard {
+            x: 218px;
+            y: 204px;
+            width: 206px;
+            height: 92px;
+            title: "UPTIME";
+            value: root.uptime;
+            detail: "Slint software renderer";
+            accent: #ffcb6b;
+        }
+    }
+
+    if root.current-page == 1 : Rectangle {
+        x: 28px;
+        y: 92px;
+        width: 424px;
+        height: 306px;
+        background: #000000;
+
+        Rectangle {
+            x: 0px;
+            y: 0px;
+            width: 424px;
+            height: 174px;
+            background: #0b1016;
+            border-color: #1a2731;
+            border-width: 1px;
+            border-radius: 16px;
+
+            Text {
+                x: 18px;
+                y: 16px;
+                text: "PANEL BRIGHTNESS";
+                color: #6f8292;
+                font-size: 12px;
+                font-weight: 600;
+            }
+
+            Text {
+                x: 18px;
+                y: 42px;
+                text: root.brightness-percent + "%";
+                color: #82aaff;
+                font-size: 44px;
+                font-weight: 800;
+            }
+
+            Text {
+                x: 296px;
+                y: 59px;
+                text: "CO5300 · 0x51";
+                color: #687a89;
+                font-size: 12px;
+            }
+
+            Rectangle {
+                x: 18px;
+                y: 108px;
+                width: 388px;
+                height: 10px;
+                background: #18232d;
+                border-radius: 5px;
 
                 Rectangle {
-                    width: 74px;
-                    height: 74px;
-                    border-radius: 18px;
-                    background: #5de4c7;
-
-                    Text {
-                        text: "S3";
-                        color: #07110e;
-                        font-size: 28px;
-                        font-weight: 800;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
-
-                VerticalLayout {
-                    spacing: 4px;
-
-                    Text {
-                        text: "CO5300 · RGB565";
-                        color: #f3f7fa;
-                        font-size: 21px;
-                        font-weight: 600;
-                    }
-
-                    Text {
-                        text: "Dirty regions aligned to 2 × 2 pixels";
-                        color: #758797;
-                        font-size: 13px;
-                    }
+                    width: 388px * root.brightness-percent / 100;
+                    height: 10px;
+                    background: #82aaff;
+                    border-radius: 5px;
                 }
             }
-        }
 
-        HorizontalLayout {
-            spacing: 12px;
-            InfoCard {
-                horizontal-stretch: 1;
-                title: "PANEL";
-                value: "480 × 480";
-            }
-            InfoCard {
-                horizontal-stretch: 1;
-                title: "DISPLAY BUS";
-                value: "QSPI 40 MHz";
-                accent: #82aaff;
-            }
-        }
-
-        HorizontalLayout {
-            spacing: 12px;
-            InfoCard {
-                horizontal-stretch: 1;
-                title: "BLE STACK";
-                value: root.ble-status;
-                accent: #c792ea;
-            }
-            InfoCard {
-                horizontal-stretch: 1;
-                title: "UPTIME";
-                value: root.uptime;
-                accent: #ffcb6b;
-            }
-        }
-
-        Rectangle { vertical-stretch: 1; }
-
-        HorizontalLayout {
             Text {
-                text: "Slint software renderer";
+                x: 18px;
+                y: 135px;
+                text: "AMOLED panel command · independent from PMIC";
                 color: #526270;
-                font-size: 12px;
-                horizontal-stretch: 1;
+                font-size: 11px;
             }
+        }
+
+        StepButton {
+            x: 0px;
+            y: 188px;
+            width: 132px;
+            height: 54px;
+            label: "− 10";
+            accent: #82aaff;
+            clicked => {
+                root.brightness-step(-10);
+            }
+        }
+
+        Rectangle {
+            x: 144px;
+            y: 188px;
+            width: 136px;
+            height: 54px;
+            background: #0d141b;
+            border-color: #1d2a34;
+            border-width: 1px;
+            border-radius: 14px;
+
             Text {
-                text: "bring-up 01";
-                color: #526270;
+                text: "5 — 100%";
+                color: #687a89;
                 font-size: 12px;
+                font-weight: 600;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        StepButton {
+            x: 292px;
+            y: 188px;
+            width: 132px;
+            height: 54px;
+            label: "+ 10";
+            accent: #82aaff;
+            clicked => {
+                root.brightness-step(10);
+            }
+        }
+
+        Rectangle {
+            x: 0px;
+            y: 254px;
+            width: 424px;
+            height: 48px;
+            background: #0d141b;
+            border-color: #1d2a34;
+            border-width: 1px;
+            border-radius: 14px;
+
+            Text {
+                x: 15px;
+                text: "RGB565 BIG-ENDIAN";
+                color: #5de4c7;
+                font-size: 11px;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+
+            Text {
+                x: 242px;
+                text: "2 × 2 DIRTY ALIGNMENT";
+                color: #687a89;
+                font-size: 10px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    if root.current-page == 2 : Rectangle {
+        x: 28px;
+        y: 92px;
+        width: 424px;
+        height: 306px;
+        background: #000000;
+
+        Rectangle {
+            x: 0px;
+            y: 0px;
+            width: 424px;
+            height: 96px;
+            background: #0b1016;
+            border-color: #1a2731;
+            border-width: 1px;
+            border-radius: 16px;
+
+            Text {
+                x: 18px;
+                y: 13px;
+                text: "BATTERY";
+                color: #6f8292;
+                font-size: 12px;
+                font-weight: 600;
+            }
+
+            Text {
+                x: 18px;
+                y: 34px;
+                text: root.battery-level;
+                color: #ffcb6b;
+                font-size: 38px;
+                font-weight: 800;
+            }
+
+            Text {
+                x: 168px;
+                y: 31px;
+                text: root.power-source;
+                color: #f3f7fa;
+                font-size: 17px;
+                font-weight: 700;
+            }
+
+            Text {
+                x: 168px;
+                y: 60px;
+                text: root.pmic-status;
+                color: #687a89;
+                font-size: 11px;
+            }
+        }
+
+        MetricCard {
+            x: 0px;
+            y: 108px;
+            width: 206px;
+            height: 87px;
+            title: "BATTERY VOLTAGE";
+            value: root.battery-voltage;
+            detail: "AXP2101 ADC";
+            accent: #ffcb6b;
+        }
+
+        MetricCard {
+            x: 218px;
+            y: 108px;
+            width: 206px;
+            height: 87px;
+            title: "VBUS";
+            value: root.vbus-voltage;
+            detail: root.power-source;
+            accent: #82aaff;
+        }
+
+        MetricCard {
+            x: 0px;
+            y: 207px;
+            width: 206px;
+            height: 87px;
+            title: "SYSTEM VOLTAGE";
+            value: root.vsys-voltage;
+            detail: "VSYS rail";
+            accent: #5de4c7;
+        }
+
+        MetricCard {
+            x: 218px;
+            y: 207px;
+            width: 206px;
+            height: 87px;
+            title: "PMIC TEMPERATURE";
+            value: root.pmic-temperature;
+            detail: "die sensor";
+            accent: #c792ea;
+        }
+    }
+
+    Rectangle {
+        x: 36px;
+        y: 414px;
+        width: 408px;
+        height: 42px;
+        background: #080d12;
+        border-color: #16222c;
+        border-width: 1px;
+        border-radius: 21px;
+
+        HorizontalLayout {
+            padding: 5px;
+            spacing: 4px;
+
+            NavButton {
+                horizontal-stretch: 1;
+                label: "OVERVIEW";
+                active: root.current-page == 0;
+                clicked => {
+                    root.current-page = 0;
+                }
+            }
+
+            NavButton {
+                horizontal-stretch: 1;
+                label: "DISPLAY";
+                active: root.current-page == 1;
+                clicked => {
+                    root.current-page = 1;
+                }
+            }
+
+            NavButton {
+                horizontal-stretch: 1;
+                label: "POWER";
+                active: root.current-page == 2;
+                clicked => {
+                    root.current-page = 2;
+                }
             }
         }
     }
