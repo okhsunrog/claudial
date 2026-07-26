@@ -1,0 +1,189 @@
+component InfoCard inherits Rectangle {
+    in property <string> title;
+    in property <string> value;
+    in property <color> accent: #5de4c7;
+
+    height: 92px;
+    background: #0d141b;
+    border-color: #1d2a34;
+    border-width: 1px;
+    border-radius: 14px;
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 7px;
+
+        Text {
+            text: root.title;
+            color: #6f8292;
+            font-size: 13px;
+        }
+
+        Text {
+            text: root.value;
+            color: root.accent;
+            font-size: 20px;
+            font-weight: 600;
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    in property <string> uptime: "0 s";
+    in property <string> ble-status: "initialized";
+
+    width: 480px;
+    height: 480px;
+    background: #05080c;
+
+    VerticalLayout {
+        padding: 26px;
+        spacing: 18px;
+
+        HorizontalLayout {
+            spacing: 12px;
+
+            VerticalLayout {
+                spacing: 2px;
+                horizontal-stretch: 1;
+
+                Text {
+                    text: "WAVESHARE";
+                    color: #5de4c7;
+                    font-size: 13px;
+                    font-weight: 700;
+                }
+
+                Text {
+                    text: "ESP32-S3 AMOLED 2.16";
+                    color: #f3f7fa;
+                    font-size: 25px;
+                    font-weight: 700;
+                }
+            }
+
+            Rectangle {
+                width: 116px;
+                height: 32px;
+                background: #0d251e;
+                border-color: #1d5a48;
+                border-width: 1px;
+                border-radius: 16px;
+
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    spacing: 8px;
+
+                    Rectangle {
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 4px;
+                        background: #5de4c7;
+                    }
+
+                    Text {
+                        text: "DISPLAY";
+                        color: #8ff5dc;
+                        font-size: 12px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            height: 112px;
+            background: #0b1016;
+            border-color: #1a2731;
+            border-width: 1px;
+            border-radius: 16px;
+
+            HorizontalLayout {
+                padding: 18px;
+                spacing: 18px;
+
+                Rectangle {
+                    width: 74px;
+                    height: 74px;
+                    border-radius: 18px;
+                    background: #5de4c7;
+
+                    Text {
+                        text: "S3";
+                        color: #07110e;
+                        font-size: 28px;
+                        font-weight: 800;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: 4px;
+
+                    Text {
+                        text: "CO5300 · RGB565";
+                        color: #f3f7fa;
+                        font-size: 21px;
+                        font-weight: 600;
+                    }
+
+                    Text {
+                        text: "Dirty regions aligned to 2 × 2 pixels";
+                        color: #758797;
+                        font-size: 13px;
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+            InfoCard {
+                horizontal-stretch: 1;
+                title: "PANEL";
+                value: "480 × 480";
+            }
+            InfoCard {
+                horizontal-stretch: 1;
+                title: "DISPLAY BUS";
+                value: "QSPI 40 MHz";
+                accent: #82aaff;
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+            InfoCard {
+                horizontal-stretch: 1;
+                title: "BLE STACK";
+                value: root.ble-status;
+                accent: #c792ea;
+            }
+            InfoCard {
+                horizontal-stretch: 1;
+                title: "UPTIME";
+                value: root.uptime;
+                accent: #ffcb6b;
+            }
+        }
+
+        Rectangle { vertical-stretch: 1; }
+
+        HorizontalLayout {
+            Text {
+                text: "Slint software renderer";
+                color: #526270;
+                font-size: 12px;
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: "bring-up 01";
+                color: #526270;
+                font-size: 12px;
+            }
+        }
+    }
+}

@@ -17,7 +17,11 @@ name    = "hello_test"
 test = false
 
 [dependencies]
-esp-hal = { version = "~1.1.0", features = ["defmt", "esp32s3", "unstable"] }
+esp-hal = { version = "~1.1.0", features = [
+  "defmt",
+  "esp32s3",
+  "unstable",
+] }
 
 esp-rtos = { version = "0.3.0", features = [
   "defmt",
@@ -49,6 +53,14 @@ trouble-host = { version = "0.6.0", features = ["gatt"] }
 
 critical-section = "1.2.0"
 static_cell      = "2.1.1"
+bytemuck         = "1.25.0"
+embedded-hal     = "1.0"
+slint = { path = "../slint/api/rs/slint", default-features = false, features = [
+  "compat-1-2",
+  "libm",
+  "renderer-software",
+  "unsafe-single-threaded",
+] }
 
 [dev-dependencies]
 embedded-test = { version = "0.7.1", features = [
@@ -57,6 +69,9 @@ embedded-test = { version = "0.7.1", features = [
   "external-executor",
   "xtensa-semihosting",
 ] }
+
+[build-dependencies]
+slint-build = { path = "../slint/api/rs/build" }
 
 # For fine tuning these settings, please refer to https://doc.rust-lang.org/cargo/reference/profiles.html
 [profile.dev]
