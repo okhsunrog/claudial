@@ -286,7 +286,7 @@ export component MainWindow inherits Window {
             height: 86px;
             title: "DISPLAY";
             value: root.brightness-percent + "%";
-            action: "CO5300 brightness";
+            action: "Adjust brightness";
             accent: #82aaff;
             clicked => {
                 root.current-page = 1;
@@ -350,7 +350,7 @@ export component MainWindow inherits Window {
             Text {
                 x: 18px;
                 y: 16px;
-                text: "PANEL BRIGHTNESS";
+                text: "BRIGHTNESS";
                 color: #6f8292;
                 font-size: 12px;
                 font-weight: 600;
@@ -368,7 +368,7 @@ export component MainWindow inherits Window {
             Text {
                 x: 296px;
                 y: 59px;
-                text: "CO5300 · 0x51";
+                text: "AMOLED";
                 color: #687a89;
                 font-size: 12px;
             }
@@ -389,13 +389,6 @@ export component MainWindow inherits Window {
                 }
             }
 
-            Text {
-                x: 18px;
-                y: 135px;
-                text: "AMOLED panel command · independent from PMIC";
-                color: #526270;
-                font-size: 11px;
-            }
         }
 
         StepButton {
@@ -442,34 +435,6 @@ export component MainWindow inherits Window {
             }
         }
 
-        Rectangle {
-            x: 0px;
-            y: 254px;
-            width: 424px;
-            height: 48px;
-            background: #0d141b;
-            border-color: #1d2a34;
-            border-width: 1px;
-            border-radius: 14px;
-
-            Text {
-                x: 15px;
-                text: "RGB565 BIG-ENDIAN";
-                color: #5de4c7;
-                font-size: 11px;
-                font-weight: 700;
-                vertical-alignment: center;
-            }
-
-            Text {
-                x: 242px;
-                text: "2 × 2 DIRTY ALIGNMENT";
-                color: #687a89;
-                font-size: 10px;
-                font-weight: 600;
-                vertical-alignment: center;
-            }
-        }
     }
 
     if root.current-page == 2 : Rectangle {
