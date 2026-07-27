@@ -6,8 +6,8 @@ Rust/`esp-hal` bring-up project for the
 The firmware initializes the CO5300 over QSPI and renders an interactive
 480 × 480 Slint UI from a PSRAM framebuffer. Dirty rectangles use the
 work-in-progress Slint physical alignment API required by the CO5300. The UI
-has overview, display, and power sections sized for the panel's rounded-corner
-safe area.
+has overview, display, power, and RTC sections sized for the panel's
+rounded-corner safe area.
 
 ## Current status
 
@@ -20,14 +20,17 @@ safe area.
 - CST9220 touch input over the shared 400 kHz I²C bus
 - interrupt-driven Slint pointer events (`TP_INT=GPIO11`, `TP_RST=GPIO40`)
 - AXP2101 battery, VBUS, VSYS, state-of-charge, and die-temperature telemetry
+- PCF85063ATL battery-backed clock with oscillator-state detection
+- on-device date and time editor with write-back verification
 - interactive brightness control using the CO5300 `0x51` panel command
-- AMOLED-black multi-page UI with overview, display, and power sections
+- AMOLED-black multi-page UI with overview, display, power, and RTC sections
 
-IMU, RTC, audio, SD, and BLE application services are not wired yet; the
+IMU, audio, SD, and BLE application services are not wired yet; the
 generated BLE/`trouble-host` stack remains initialized.
 The firmware has been flashed and its full-frame plus aligned partial-frame
 paths complete successfully on the physical board according to RTT/defmt.
-CO5300, CST9220, and AXP2101 initialization all succeed on the physical board.
+CO5300, CST9220, AXP2101, and PCF85063 initialization all succeed on the
+physical board.
 The UI, orientation, colors, CST9220 IRQ/coordinate mapping, press/release
 events, page navigation, and brightness controls have been verified on the
 physical AMOLED board.
@@ -41,6 +44,7 @@ Brightness is independent of the PMIC on this AMOLED board.
 - `src/board.rs` — dimensions, buses, and board pin assignments
 - `src/co5300.rs` — CO5300 QSPI transport and aligned region uploads
 - `src/pmic.rs` — conservative AXP2101 setup and telemetry
+- `src/rtc.rs` — PCF85063 probe, calendar reads, and date/time conversion
 - `src/slint_platform.rs` — minimal Slint platform adapter
 - `ui/main.slint` — rounded-safe interactive AMOLED UI
 

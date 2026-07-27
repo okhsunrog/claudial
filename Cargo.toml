@@ -37,6 +37,7 @@ esp-bootloader-esp-idf = { version = "0.5.0", features = ["defmt", "esp32s3"] }
 bt-hci = "0.8.0"
 axp2101-dd = { version = "0.2.3", features = ["defmt"] }
 cst92xx = { version = "0.1.0", features = ["defmt"] }
+pcf85063a = { version = "0.1.1", features = ["defmt"] }
 embassy-embedded-hal = "0.6.0"
 embassy-executor = { version = "0.10.0", features = ["defmt"] }
 embassy-sync = "0.8.0"
@@ -60,6 +61,7 @@ critical-section = "1.2.0"
 static_cell      = "2.1.1"
 bytemuck         = "1.25.0"
 embedded-hal     = "1.0"
+time             = { version = "0.3.47", default-features = false }
 slint = { path = "../slint/api/rs/slint", default-features = false, features = [
   "compat-1-2",
   "libm",

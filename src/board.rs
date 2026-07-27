@@ -16,5 +16,6 @@ pub const I2C_SCL_GPIO: u8 = 14;
 pub const I2C_SDA_GPIO: u8 = 15;
 pub const TOUCH_INTERRUPT_GPIO: u8 = 11;
 pub const TOUCH_RESET_GPIO: u8 = 40;
+pub const RTC_INTERRUPT_GPIO: u8 = 13;
 
 pub const USER_BUTTON_GPIO: u8 = 18;

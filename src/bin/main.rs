@@ -42,6 +42,7 @@ use trouble_host::prelude::*;
 use waveshare_esp32s3_amoled_2_16::board::{DISPLAY_HEIGHT, DISPLAY_SPI_MHZ, DISPLAY_WIDTH};
 use waveshare_esp32s3_amoled_2_16::co5300::Co5300;
 use waveshare_esp32s3_amoled_2_16::pmic::{self, PmicStats};
+use waveshare_esp32s3_amoled_2_16::rtc::{self, DateTime as RtcDateTime, Snapshot as RtcSnapshot};
 use waveshare_esp32s3_amoled_2_16::slint_platform::EspPlatform;
 
 extern crate alloc;
@@ -70,10 +71,21 @@ enum PmicEvent {
     Error,
 }
 
+#[derive(Clone, Copy)]
+enum RtcEvent {
+    Online(RtcSnapshot),
+    NeedsSetting,
+    Saved(RtcSnapshot),
+    SaveFailed,
+    Error,
+}
+
 static TOUCH_EVENTS: Channel<CriticalSectionRawMutex, TouchState, 8> = Channel::new();
 static TOUCH_READY_SIGNAL: Signal<CriticalSectionRawMutex, bool> = Signal::new();
 static PMIC_SIGNAL: Signal<CriticalSectionRawMutex, PmicEvent> = Signal::new();
 static BRIGHTNESS_SIGNAL: Signal<CriticalSectionRawMutex, u8> = Signal::new();
+static RTC_SIGNAL: Signal<CriticalSectionRawMutex, RtcEvent> = Signal::new();
+static RTC_SET_SIGNAL: Signal<CriticalSectionRawMutex, RtcDateTime> = Signal::new();
 
 fn brightness_register(percent: u8) -> u8 {
     let percent = percent.clamp(MINIMUM_BRIGHTNESS_PERCENT, 100);
@@ -172,6 +184,149 @@ async fn pmic_task(i2c_bus: &'static SharedI2cBus) {
     }
 }
 
+#[embassy_executor::task]
+#[allow(
+    clippy::large_stack_frames,
+    reason = "Embassy stores the async task state statically rather than on the runtime call stack"
+)]
+async fn rtc_task(i2c_bus: &'static SharedI2cBus) {
+    let (mut clock, clock_valid) = match rtc::init(I2cDevice::new(i2c_bus)).await {
+        Ok(result) => result,
+        Err(_) => {
+            error!("PCF85063 initialization failed");
+            RTC_SIGNAL.signal(RtcEvent::Error);
+            return;
+        }
+    };
+    info!("PCF85063 initialized; clock valid: {}", clock_valid);
+
+    match rtc::read(&mut clock).await {
+        Ok(snapshot) => {
+            info!(
+                "RTC time: {}-{:02}-{:02} {:02}:{:02}:{:02}",
+                snapshot.datetime.year,
+                snapshot.datetime.month,
+                snapshot.datetime.day,
+                snapshot.datetime.hour,
+                snapshot.datetime.minute,
+                snapshot.datetime.second
+            );
+            RTC_SIGNAL.signal(RtcEvent::Online(snapshot));
+        }
+        Err(_) => RTC_SIGNAL.signal(RtcEvent::NeedsSetting),
+    }
+
+    let mut last_read = Instant::now();
+    loop {
+        if let Some(request) = RTC_SET_SIGNAL.try_take() {
+            let result = match request.to_primitive() {
+                Ok(datetime) => clock.set_datetime(&datetime).await,
+                Err(_) => {
+                    error!("Rejected invalid RTC date/time");
+                    RTC_SIGNAL.signal(RtcEvent::SaveFailed);
+                    Timer::after(Duration::from_millis(20)).await;
+                    continue;
+                }
+            };
+
+            match result {
+                Ok(()) => match rtc::read(&mut clock).await {
+                    Ok(snapshot) if snapshot.clock_valid => {
+                        info!(
+                            "RTC set and verified: {}-{:02}-{:02} {:02}:{:02}:{:02}",
+                            snapshot.datetime.year,
+                            snapshot.datetime.month,
+                            snapshot.datetime.day,
+                            snapshot.datetime.hour,
+                            snapshot.datetime.minute,
+                            snapshot.datetime.second
+                        );
+                        RTC_SIGNAL.signal(RtcEvent::Saved(snapshot));
+                        last_read = Instant::now();
+                    }
+                    _ => {
+                        error!("PCF85063 write verification failed");
+                        RTC_SIGNAL.signal(RtcEvent::SaveFailed);
+                    }
+                },
+                Err(_) => {
+                    error!("PCF85063 write failed");
+                    RTC_SIGNAL.signal(RtcEvent::SaveFailed);
+                }
+            }
+        }
+
+        if last_read.elapsed() >= Duration::from_secs(1) {
+            last_read = Instant::now();
+            match rtc::read(&mut clock).await {
+                Ok(snapshot) => RTC_SIGNAL.signal(RtcEvent::Online(snapshot)),
+                Err(_) => {
+                    error!("PCF85063 read failed");
+                    RTC_SIGNAL.signal(RtcEvent::Error);
+                }
+            }
+        }
+
+        Timer::after(Duration::from_millis(20)).await;
+    }
+}
+
+fn days_in_month(year: i32, month: i32) -> i32 {
+    match month {
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+fn wrap_step(value: i32, delta: i32, minimum: i32, maximum: i32) -> i32 {
+    let next = value + delta;
+    if next < minimum {
+        maximum
+    } else if next > maximum {
+        minimum
+    } else {
+        next
+    }
+}
+
+fn sync_rtc_editor(ui: &MainWindow, datetime: RtcDateTime) {
+    ui.set_rtc_edit_year(i32::from(datetime.year));
+    ui.set_rtc_edit_month(i32::from(datetime.month));
+    ui.set_rtc_edit_day(i32::from(datetime.day));
+    ui.set_rtc_edit_hour(i32::from(datetime.hour));
+    ui.set_rtc_edit_minute(i32::from(datetime.minute));
+    ui.set_rtc_edit_second(i32::from(datetime.second));
+}
+
+fn update_rtc_display(ui: &MainWindow, snapshot: RtcSnapshot) {
+    let datetime = snapshot.datetime;
+    ui.set_rtc_time(
+        format!(
+            "{:02}:{:02}:{:02}",
+            datetime.hour, datetime.minute, datetime.second
+        )
+        .into(),
+    );
+    ui.set_rtc_date(
+        format!(
+            "{}-{:02}-{:02}",
+            datetime.year, datetime.month, datetime.day
+        )
+        .into(),
+    );
+    ui.set_rtc_clock_valid(snapshot.clock_valid);
+    ui.set_rtc_status(if snapshot.clock_valid {
+        "Clock ready".into()
+    } else {
+        "Set date and time".into()
+    });
+    if !ui.get_rtc_edit_dirty() {
+        sync_rtc_editor(ui, datetime);
+    }
+}
+
 fn dispatch_touch_state(
     window: &MinimalSoftwareWindow,
     last_position: &mut Option<slint::LogicalPosition>,
@@ -264,6 +419,7 @@ async fn main(spawner: Spawner) -> ! {
     let touch_reset = Output::new(peripherals.GPIO40, Level::High, OutputConfig::default());
     spawner.spawn(touch_task(i2c_bus, touch_interrupt, touch_reset).unwrap());
     spawner.spawn(pmic_task(i2c_bus).unwrap());
+    spawner.spawn(rtc_task(i2c_bus).unwrap());
 
     let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) =
         dma_buffers!(DISPLAY_DMA_BUFFER_SIZE);
@@ -324,12 +480,55 @@ async fn main(spawner: Spawner) -> ! {
             BRIGHTNESS_SIGNAL.signal(brightness as u8);
         }
     });
+    let ui_weak = ui.as_weak();
+    ui.on_rtc_step(move |field, delta| {
+        let Some(ui) = ui_weak.upgrade() else {
+            return;
+        };
+        match field {
+            0 => ui.set_rtc_edit_year((ui.get_rtc_edit_year() + delta).clamp(2000, 2099)),
+            1 => ui.set_rtc_edit_month(wrap_step(ui.get_rtc_edit_month(), delta, 1, 12)),
+            2 => {
+                let max_day = days_in_month(ui.get_rtc_edit_year(), ui.get_rtc_edit_month());
+                ui.set_rtc_edit_day(wrap_step(ui.get_rtc_edit_day(), delta, 1, max_day));
+            }
+            3 => ui.set_rtc_edit_hour(wrap_step(ui.get_rtc_edit_hour(), delta, 0, 23)),
+            4 => ui.set_rtc_edit_minute(wrap_step(ui.get_rtc_edit_minute(), delta, 0, 59)),
+            5 => ui.set_rtc_edit_second(wrap_step(ui.get_rtc_edit_second(), delta, 0, 59)),
+            _ => return,
+        }
+        let max_day = days_in_month(ui.get_rtc_edit_year(), ui.get_rtc_edit_month());
+        ui.set_rtc_edit_day(ui.get_rtc_edit_day().min(max_day));
+        ui.set_rtc_edit_dirty(true);
+        ui.set_rtc_status("Unsaved changes".into());
+    });
+    let ui_weak = ui.as_weak();
+    ui.on_rtc_save(move || {
+        let Some(ui) = ui_weak.upgrade() else {
+            return;
+        };
+        let request = RtcDateTime {
+            year: ui.get_rtc_edit_year() as u16,
+            month: ui.get_rtc_edit_month() as u8,
+            day: ui.get_rtc_edit_day() as u8,
+            hour: ui.get_rtc_edit_hour() as u8,
+            minute: ui.get_rtc_edit_minute() as u8,
+            second: ui.get_rtc_edit_second() as u8,
+        };
+        if request.to_primitive().is_err() {
+            ui.set_rtc_status("Invalid date".into());
+            return;
+        }
+        ui.set_rtc_status("Saving...".into());
+        RTC_SET_SIGNAL.signal(request);
+    });
     let started_at = Instant::now();
     let mut displayed_second = u64::MAX;
     let mut rendered_frames = 0_u32;
     let mut last_touch_position = None;
     let mut touch_ready = false;
     let mut pmic_ready = false;
+    let mut rtc_ready = false;
     let mut application_ready_logged = false;
 
     loop {
@@ -394,6 +593,32 @@ async fn main(spawner: Spawner) -> ! {
             }
         }
 
+        if let Some(event) = RTC_SIGNAL.try_take() {
+            match event {
+                RtcEvent::Online(snapshot) => {
+                    rtc_ready = true;
+                    update_rtc_display(&ui, snapshot);
+                }
+                RtcEvent::NeedsSetting => {
+                    rtc_ready = true;
+                    ui.set_rtc_clock_valid(false);
+                    ui.set_rtc_status("Set date and time".into());
+                }
+                RtcEvent::Saved(snapshot) => {
+                    rtc_ready = true;
+                    ui.set_rtc_edit_dirty(false);
+                    update_rtc_display(&ui, snapshot);
+                    ui.set_rtc_status("Time saved".into());
+                }
+                RtcEvent::SaveFailed => {
+                    ui.set_rtc_status("Save failed".into());
+                }
+                RtcEvent::Error => {
+                    ui.set_rtc_status("RTC unavailable".into());
+                }
+            }
+        }
+
         if let Some(percent) = BRIGHTNESS_SIGNAL.try_take() {
             if display.set_brightness(brightness_register(percent)).is_ok() {
                 info!("Display brightness set to {}%", percent);
@@ -424,7 +649,12 @@ async fn main(spawner: Spawner) -> ! {
             }
         }
 
-        if !application_ready_logged && touch_ready && pmic_ready && rendered_frames >= 2 {
+        if !application_ready_logged
+            && touch_ready
+            && pmic_ready
+            && rtc_ready
+            && rendered_frames >= 2
+        {
             application_ready_logged = true;
             info!("Application ready for touch validation");
         }

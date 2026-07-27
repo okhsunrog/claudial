@@ -116,6 +116,66 @@ component StepButton inherits Rectangle {
     }
 }
 
+component ValueStepper inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <color> accent: #5de4c7;
+    callback step(int);
+
+    background: #0d141b;
+    border-color: #1d2a34;
+    border-width: 1px;
+    border-radius: 14px;
+
+    Text {
+        x: 38px;
+        y: 8px;
+        width: root.width - 76px;
+        text: root.label;
+        color: #6f8292;
+        font-size: 10px;
+        font-weight: 600;
+        horizontal-alignment: center;
+    }
+
+    Text {
+        x: 38px;
+        y: 27px;
+        width: root.width - 76px;
+        height: 34px;
+        text: root.value;
+        color: root.accent;
+        font-size: 21px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    StepButton {
+        x: 6px;
+        y: 20px;
+        width: 32px;
+        height: 50px;
+        label: "−";
+        accent: root.accent;
+        clicked => {
+            root.step(-1);
+        }
+    }
+
+    StepButton {
+        x: root.width - 38px;
+        y: 20px;
+        width: 32px;
+        height: 50px;
+        label: "+";
+        accent: root.accent;
+        clicked => {
+            root.step(1);
+        }
+    }
+}
+
 component NavButton inherits Rectangle {
     in property <string> label;
     in property <bool> active;
@@ -153,9 +213,22 @@ export component MainWindow inherits Window {
     in property <string> vsys-voltage: "--";
     in property <string> pmic-temperature: "--";
     in property <string> power-source: "probing";
+    in property <string> rtc-time: "--:--:--";
+    in property <string> rtc-date: "---- -- --";
+    in property <string> rtc-status: "RTC starting";
+    in property <bool> rtc-clock-valid: false;
+    in-out property <int> rtc-edit-year: 2026;
+    in-out property <int> rtc-edit-month: 1;
+    in-out property <int> rtc-edit-day: 1;
+    in-out property <int> rtc-edit-hour: 0;
+    in-out property <int> rtc-edit-minute: 0;
+    in-out property <int> rtc-edit-second: 0;
+    in-out property <bool> rtc-edit-dirty: false;
     in-out property <int> brightness-percent: 80;
     in-out property <int> current-page: 0;
     callback brightness-step(int);
+    callback rtc-step(int, int);
+    callback rtc-save();
 
     width: 480px;
     height: 480px;
@@ -181,7 +254,8 @@ export component MainWindow inherits Window {
             x: 0px;
             y: 21px;
             text: root.current-page == 0 ? "SYSTEM OVERVIEW" :
-                root.current-page == 1 ? "DISPLAY" : "POWER";
+                root.current-page == 1 ? "DISPLAY" :
+                root.current-page == 2 ? "POWER" : "RTC CLOCK";
             color: #f3f7fa;
             font-size: 22px;
             font-weight: 700;
@@ -307,15 +381,18 @@ export component MainWindow inherits Window {
             }
         }
 
-        MetricCard {
+        MenuCard {
             x: 0px;
             y: 204px;
             width: 206px;
             height: 92px;
-            title: "BLE STACK";
-            value: root.ble-status;
-            detail: "trouble-host retained";
+            title: "RTC";
+            value: root.rtc-time;
+            action: root.rtc-clock-valid ? root.rtc-date : root.rtc-status;
             accent: #c792ea;
+            clicked => {
+                root.current-page = 3;
+            }
         }
 
         MetricCard {
@@ -536,6 +613,156 @@ export component MainWindow inherits Window {
         }
     }
 
+    if root.current-page == 3 : Rectangle {
+        x: 28px;
+        y: 92px;
+        width: 424px;
+        height: 306px;
+        background: #000000;
+
+        Rectangle {
+            x: 0px;
+            y: 0px;
+            width: 424px;
+            height: 70px;
+            background: #0b1016;
+            border-color: #1a2731;
+            border-width: 1px;
+            border-radius: 16px;
+
+            Text {
+                x: 18px;
+                y: 8px;
+                text: "CURRENT TIME";
+                color: #6f8292;
+                font-size: 10px;
+                font-weight: 600;
+            }
+
+            Text {
+                x: 18px;
+                y: 25px;
+                text: root.rtc-time;
+                color: root.rtc-clock-valid ? #c792ea : #687a89;
+                font-size: 30px;
+                font-weight: 800;
+            }
+
+            Text {
+                x: 234px;
+                y: 17px;
+                width: 172px;
+                text: root.rtc-date;
+                color: #f3f7fa;
+                font-size: 15px;
+                font-weight: 700;
+                horizontal-alignment: right;
+            }
+
+            Text {
+                x: 214px;
+                y: 43px;
+                width: 192px;
+                text: root.rtc-status;
+                color: root.rtc-edit-dirty ? #ffcb6b : #687a89;
+                font-size: 10px;
+                horizontal-alignment: right;
+            }
+        }
+
+        ValueStepper {
+            x: 0px;
+            y: 82px;
+            width: 136px;
+            height: 76px;
+            label: "YEAR";
+            value: "\{root.rtc-edit-year}";
+            accent: #c792ea;
+            step(delta) => {
+                root.rtc-step(0, delta);
+            }
+        }
+
+        ValueStepper {
+            x: 144px;
+            y: 82px;
+            width: 136px;
+            height: 76px;
+            label: "MONTH";
+            value: "\{root.rtc-edit-month}";
+            accent: #c792ea;
+            step(delta) => {
+                root.rtc-step(1, delta);
+            }
+        }
+
+        ValueStepper {
+            x: 288px;
+            y: 82px;
+            width: 136px;
+            height: 76px;
+            label: "DAY";
+            value: "\{root.rtc-edit-day}";
+            accent: #c792ea;
+            step(delta) => {
+                root.rtc-step(2, delta);
+            }
+        }
+
+        ValueStepper {
+            x: 0px;
+            y: 170px;
+            width: 136px;
+            height: 76px;
+            label: "HOUR";
+            value: "\{root.rtc-edit-hour}";
+            accent: #82aaff;
+            step(delta) => {
+                root.rtc-step(3, delta);
+            }
+        }
+
+        ValueStepper {
+            x: 144px;
+            y: 170px;
+            width: 136px;
+            height: 76px;
+            label: "MINUTE";
+            value: "\{root.rtc-edit-minute}";
+            accent: #82aaff;
+            step(delta) => {
+                root.rtc-step(4, delta);
+            }
+        }
+
+        ValueStepper {
+            x: 288px;
+            y: 170px;
+            width: 136px;
+            height: 76px;
+            label: "SECOND";
+            value: "\{root.rtc-edit-second}";
+            accent: #82aaff;
+            step(delta) => {
+                root.rtc-step(5, delta);
+            }
+        }
+
+        StepButton {
+            x: 0px;
+            y: 258px;
+            width: 424px;
+            height: 48px;
+            label: root.rtc-edit-dirty ? "SAVE TIME" : "TIME IS SAVED";
+            accent: root.rtc-edit-dirty ? #5de4c7 : #286c5b;
+            clicked => {
+                if root.rtc-edit-dirty {
+                    root.rtc-save();
+                }
+            }
+        }
+    }
+
     Rectangle {
         x: 36px;
         y: 414px;
@@ -574,6 +801,15 @@ export component MainWindow inherits Window {
                 active: root.current-page == 2;
                 clicked => {
                     root.current-page = 2;
+                }
+            }
+
+            NavButton {
+                horizontal-stretch: 1;
+                label: "RTC";
+                active: root.current-page == 3;
+                clicked => {
+                    root.current-page = 3;
                 }
             }
         }
