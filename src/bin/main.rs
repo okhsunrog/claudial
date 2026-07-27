@@ -41,7 +41,7 @@ use static_cell::StaticCell;
 use trouble_host::prelude::*;
 use waveshare_esp32s3_amoled_2_16::board::{DISPLAY_HEIGHT, DISPLAY_SPI_MHZ, DISPLAY_WIDTH};
 use waveshare_esp32s3_amoled_2_16::co5300::Co5300;
-use waveshare_esp32s3_amoled_2_16::pmic::{self, PmicStats};
+use waveshare_esp32s3_amoled_2_16::pmic::{self, PmicStats, PowerKey};
 use waveshare_esp32s3_amoled_2_16::rtc::{self, DateTime as RtcDateTime, Snapshot as RtcSnapshot};
 use waveshare_esp32s3_amoled_2_16::slint_platform::EspPlatform;
 
@@ -83,6 +83,8 @@ enum RtcEvent {
 static TOUCH_EVENTS: Channel<CriticalSectionRawMutex, TouchState, 8> = Channel::new();
 static TOUCH_READY_SIGNAL: Signal<CriticalSectionRawMutex, bool> = Signal::new();
 static PMIC_SIGNAL: Signal<CriticalSectionRawMutex, PmicEvent> = Signal::new();
+static POWER_KEY_SIGNAL: Signal<CriticalSectionRawMutex, PowerKey> = Signal::new();
+static POWER_OFF_SIGNAL: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 static BRIGHTNESS_SIGNAL: Signal<CriticalSectionRawMutex, u8> = Signal::new();
 static RTC_SIGNAL: Signal<CriticalSectionRawMutex, RtcEvent> = Signal::new();
 static RTC_SET_SIGNAL: Signal<CriticalSectionRawMutex, RtcDateTime> = Signal::new();
@@ -163,24 +165,47 @@ async fn pmic_task(i2c_bus: &'static SharedI2cBus) {
             return;
         }
     };
-    info!("AXP2101 initialized for telemetry");
+    info!("AXP2101 initialized for telemetry and power-key events");
 
     let mut first_sample = true;
+    let mut last_sample = Instant::now();
     loop {
-        match pmic::read_stats(&mut axp).await {
-            Ok(stats) => {
-                if first_sample {
-                    first_sample = false;
-                    info!("AXP2101 first telemetry sample: {}", stats);
-                }
-                PMIC_SIGNAL.signal(PmicEvent::Online(stats));
-            }
-            Err(_) => {
-                error!("AXP2101 telemetry read failed");
-                PMIC_SIGNAL.signal(PmicEvent::Error);
+        if POWER_OFF_SIGNAL.try_take().is_some() {
+            info!("Power off requested");
+            if axp.power_off().await.is_err() {
+                error!("AXP2101 power off failed");
             }
         }
-        Timer::after(Duration::from_secs(1)).await;
+
+        match pmic::poll_power_key(&mut axp).await {
+            Ok(Some(event)) => {
+                info!("AXP2101 power key: {}", event);
+                POWER_KEY_SIGNAL.signal(event);
+            }
+            Ok(None) => {}
+            Err(_) => error!("AXP2101 power-key poll failed"),
+        }
+
+        if first_sample || last_sample.elapsed() >= Duration::from_secs(1) {
+            last_sample = Instant::now();
+            match pmic::read_stats(&mut axp).await {
+                Ok(stats) => {
+                    if first_sample {
+                        first_sample = false;
+                        info!("AXP2101 first telemetry sample: {}", stats);
+                    }
+                    PMIC_SIGNAL.signal(PmicEvent::Online(stats));
+                }
+                Err(_) => {
+                    error!("AXP2101 telemetry read failed");
+                    PMIC_SIGNAL.signal(PmicEvent::Error);
+                }
+            }
+        }
+
+        // Power-key status is latched in the PMIC, so polling only determines
+        // the response latency and cannot lose a press.
+        Timer::after(Duration::from_millis(200)).await;
     }
 }
 
@@ -358,6 +383,32 @@ fn dispatch_touch_state(
     }
 }
 
+async fn wake_display(
+    display: &mut Co5300<'_>,
+    window: &MinimalSoftwareWindow,
+    brightness_percent: u8,
+) -> bool {
+    if display.wake().is_err() {
+        error!("CO5300 sleep-out failed");
+        return false;
+    }
+
+    Timer::after(Duration::from_millis(120)).await;
+    if display.display_on().is_err() {
+        error!("CO5300 display-on failed");
+        return false;
+    }
+    if display
+        .set_brightness(brightness_register(brightness_percent))
+        .is_err()
+    {
+        error!("CO5300 brightness restore failed");
+    }
+
+    window.request_redraw();
+    true
+}
+
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -480,6 +531,8 @@ async fn main(spawner: Spawner) -> ! {
             BRIGHTNESS_SIGNAL.signal(brightness as u8);
         }
     });
+    ui.on_power_off(|| POWER_OFF_SIGNAL.signal(()));
+    ui.on_reboot(|| esp_hal::system::software_reset());
     let ui_weak = ui.as_weak();
     ui.on_rtc_step(move |field, delta| {
         let Some(ui) = ui_weak.upgrade() else {
@@ -530,9 +583,55 @@ async fn main(spawner: Spawner) -> ! {
     let mut pmic_ready = false;
     let mut rtc_ready = false;
     let mut application_ready_logged = false;
+    let mut display_on = true;
+    let mut current_brightness_percent = DEFAULT_BRIGHTNESS_PERCENT;
 
     loop {
         slint::platform::update_timers_and_animations();
+
+        if let Some(event) = POWER_KEY_SIGNAL.try_take() {
+            match event {
+                PowerKey::Short if display_on => {
+                    dispatch_touch_state(
+                        &slint_window,
+                        &mut last_touch_position,
+                        TouchState::Released,
+                    );
+                    ui.set_show_power_menu(false);
+                    if display.sleep().is_ok() {
+                        display_on = false;
+                        info!("Display asleep (PWR short press)");
+                    } else {
+                        error!("CO5300 sleep failed");
+                    }
+                }
+                PowerKey::Short => {
+                    if wake_display(&mut display, &slint_window, current_brightness_percent).await {
+                        display_on = true;
+                        info!("Display awake (PWR short press)");
+                    }
+                }
+                PowerKey::Long => {
+                    if !display_on
+                        && wake_display(&mut display, &slint_window, current_brightness_percent)
+                            .await
+                    {
+                        display_on = true;
+                    }
+                    if display_on {
+                        ui.set_show_power_menu(true);
+                        slint_window.request_redraw();
+                        info!("Power menu opened (PWR long press)");
+                    }
+                }
+            }
+        }
+
+        if !display_on {
+            while TOUCH_EVENTS.try_receive().is_ok() {}
+            Timer::after(Duration::from_millis(50)).await;
+            continue;
+        }
 
         if let Some(ready) = TOUCH_READY_SIGNAL.try_take() {
             touch_ready = ready;
@@ -621,6 +720,7 @@ async fn main(spawner: Spawner) -> ! {
 
         if let Some(percent) = BRIGHTNESS_SIGNAL.try_take() {
             if display.set_brightness(brightness_register(percent)).is_ok() {
+                current_brightness_percent = percent;
                 info!("Display brightness set to {}%", percent);
             } else {
                 error!("Display brightness update failed");

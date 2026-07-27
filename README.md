@@ -23,6 +23,8 @@ rounded-corner safe area.
 - PCF85063ATL battery-backed clock with oscillator-state detection
 - on-device date and time editor with write-back verification
 - interactive brightness control using the CO5300 `0x51` panel command
+- PWR short press toggles CO5300 sleep; 2.5 s hold opens the power menu
+- power menu actions for AXP2101 soft power-off and ESP32-S3 restart
 - AMOLED-black multi-page UI with overview, display, power, and RTC sections
 
 IMU, audio, SD, and BLE application services are not wired yet; the

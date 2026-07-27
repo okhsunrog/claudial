@@ -226,9 +226,12 @@ export component MainWindow inherits Window {
     in-out property <bool> rtc-edit-dirty: false;
     in-out property <int> brightness-percent: 80;
     in-out property <int> current-page: 0;
+    in-out property <bool> show-power-menu: false;
     callback brightness-step(int);
     callback rtc-step(int, int);
     callback rtc-save();
+    callback power-off();
+    callback reboot();
 
     width: 480px;
     height: 480px;
@@ -810,6 +813,132 @@ export component MainWindow inherits Window {
                 active: root.current-page == 3;
                 clicked => {
                     root.current-page = 3;
+                }
+            }
+        }
+    }
+
+    if root.show-power-menu : Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 100%;
+        height: 100%;
+        background: #000000d9;
+
+        power-menu-backdrop := TouchArea {
+            clicked => {
+                root.show-power-menu = false;
+            }
+        }
+
+        Rectangle {
+            x: 68px;
+            y: 98px;
+            width: 344px;
+            height: 284px;
+            background: #0b1016;
+            border-color: #1d2a34;
+            border-width: 1px;
+            border-radius: 20px;
+
+            // Keep taps inside the card from reaching the dismiss backdrop.
+            TouchArea {}
+
+            Text {
+                x: 24px;
+                y: 22px;
+                width: 296px;
+                text: "POWER";
+                color: #5de4c7;
+                font-size: 12px;
+                font-weight: 700;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                x: 24px;
+                y: 45px;
+                width: 296px;
+                text: "Choose an action";
+                color: #f3f7fa;
+                font-size: 22px;
+                font-weight: 700;
+                horizontal-alignment: center;
+            }
+
+            power-off-button := TouchArea {
+                x: 24px;
+                y: 88px;
+                width: 296px;
+                height: 52px;
+                clicked => {
+                    root.show-power-menu = false;
+                    root.power-off();
+                }
+
+                Rectangle {
+                    background: power-off-button.pressed ? #8f273a : #c7354e;
+                    border-radius: 14px;
+
+                    Text {
+                        text: "POWER OFF";
+                        color: white;
+                        font-size: 14px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            reboot-button := TouchArea {
+                x: 24px;
+                y: 152px;
+                width: 296px;
+                height: 52px;
+                clicked => {
+                    root.show-power-menu = false;
+                    root.reboot();
+                }
+
+                Rectangle {
+                    background: reboot-button.pressed ? #235d79 : #2f789b;
+                    border-radius: 14px;
+
+                    Text {
+                        text: "RESTART";
+                        color: white;
+                        font-size: 14px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            cancel-button := TouchArea {
+                x: 24px;
+                y: 216px;
+                width: 296px;
+                height: 44px;
+                clicked => {
+                    root.show-power-menu = false;
+                }
+
+                Rectangle {
+                    background: cancel-button.pressed ? #17242e : #0d141b;
+                    border-color: #1d2a34;
+                    border-width: 1px;
+                    border-radius: 14px;
+
+                    Text {
+                        text: "CANCEL";
+                        color: #6f8292;
+                        font-size: 13px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
                 }
             }
         }

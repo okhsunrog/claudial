@@ -16,8 +16,10 @@ const QSPI_WRITE_COMMAND: u16 = 0x02;
 const QSPI_WRITE_PIXELS: u16 = 0x32;
 const QSPI_MEMORY_CONTINUE_ADDRESS: u32 = 0x00_3c_00;
 
+const SLEEP_IN: u8 = 0x10;
 const SLEEP_OUT: u8 = 0x11;
 const DISPLAY_INVERSION_OFF: u8 = 0x20;
+const DISPLAY_OFF: u8 = 0x28;
 const DISPLAY_ON: u8 = 0x29;
 const SET_COLUMN_ADDRESS: u8 = 0x2a;
 const SET_PAGE_ADDRESS: u8 = 0x2b;
@@ -100,6 +102,24 @@ impl<'d> Co5300<'d> {
 
     pub fn set_brightness(&mut self, brightness: u8) -> Result<(), Error> {
         self.write_command(WRITE_BRIGHTNESS_NORMAL, &[brightness])
+    }
+
+    /// Blank the panel and enter its low-power sleep mode.
+    pub fn sleep(&mut self) -> Result<(), Error> {
+        self.write_command(DISPLAY_OFF, &[])?;
+        self.write_command(SLEEP_IN, &[])
+    }
+
+    /// Leave low-power sleep mode.
+    ///
+    /// The caller must wait at least 120 ms before calling [`Self::display_on`].
+    pub fn wake(&mut self) -> Result<(), Error> {
+        self.write_command(SLEEP_OUT, &[])
+    }
+
+    /// Enable panel output after the sleep-out delay has elapsed.
+    pub fn display_on(&mut self) -> Result<(), Error> {
+        self.write_command(DISPLAY_ON, &[])
     }
 
     /// Send every rectangle rendered by Slint to the panel.
