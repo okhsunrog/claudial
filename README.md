@@ -24,6 +24,7 @@ rounded-corner safe area.
 - on-device date and time editor with write-back verification
 - interactive brightness control using the CO5300 `0x51` panel command
 - PWR short press toggles CO5300 sleep; 2.5 s hold opens the power menu
+- powering on from the AXP2101 off state requires a 2 s PWR hold
 - power menu actions for AXP2101 soft power-off and ESP32-S3 restart
 - AMOLED-black multi-page UI with overview, display, power, and RTC sections
 

@@ -43,12 +43,14 @@ where
         defmt::warn!("Unexpected AXP2101 chip ID: 0x{:02X}", chip_id);
     }
 
-    // Match the power-key behavior used by the M5Core2 demo: report a long
-    // press after 2.5 seconds, while retaining a 10 second PMIC-controlled
-    // emergency power-off. These fields do not affect the board's regulators.
+    // Require a two-second hold to power on from the PMIC's off state, report
+    // a long press after 2.5 seconds while running, and retain a 10-second
+    // PMIC-controlled emergency power-off. These fields do not affect the
+    // board's regulators.
     axp.ll
         .power_on_level()
         .modify_async(|register| {
+            register.set_on_level(axp2101_dd::OnLevel::S2);
             register.set_off_level(axp2101_dd::OffLevel::S10);
             register.set_irq_level(axp2101_dd::IrqLevel::S25);
         })
