@@ -12,7 +12,7 @@ use alloc::format;
 use alloc::vec;
 use bt_hci::controller::ExternalController;
 use cst92xx::CST92xx;
-use defmt::{error, info};
+use defmt::{debug, error, info};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either, select};
@@ -29,7 +29,7 @@ use esp_hal::gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull};
 use esp_hal::i2c::master::{Config as I2cConfig, I2c};
 use esp_hal::spi::Mode;
 use esp_hal::spi::master::{Config as SpiConfig, Spi};
-use esp_hal::time::Rate;
+use esp_hal::time::{Instant as HalInstant, Rate};
 use esp_hal::timer::timg::TimerGroup;
 use esp_radio::ble::controller::BleConnector;
 use panic_rtt_target as _;
@@ -82,6 +82,82 @@ enum RtcEvent {
     Saved(RtcSnapshot),
     SaveFailed,
     Error,
+}
+
+/// Frames reported individually before switching to batch summaries. The first
+/// frame is the only full-screen upload and the single most interesting sample.
+const DETAILED_FRAMES: u32 = 8;
+/// Frames per summary once individual reporting stops.
+const SUMMARY_FRAMES: u32 = 16;
+
+/// What one frame cost, split into the two halves that are optimized
+/// independently: rendering into the PSRAM framebuffer, and pushing the damaged
+/// rectangles out over QSPI.
+#[derive(Clone, Copy, Default)]
+struct FrameTiming {
+    render_us: u32,
+    upload_us: u32,
+    pixels: u64,
+    rects: u32,
+    transfers: u32,
+}
+
+/// Rolling frame-cost accumulator.
+///
+/// Logging every frame would both flood RTT and perturb what it measures, so
+/// only the first few frames are reported individually, at `info`, as a boot
+/// benchmark. The ongoing batch summaries are logged at `debug` so they stay
+/// out of the way until someone is actually looking for them.
+#[derive(Default)]
+struct FrameStats {
+    frames: u32,
+    render_us: u64,
+    upload_us: u64,
+    pixels: u64,
+    transfers: u64,
+    worst_render_us: u32,
+    worst_upload_us: u32,
+}
+
+impl FrameStats {
+    fn record(&mut self, frame_number: u32, frame: FrameTiming) {
+        if frame_number <= DETAILED_FRAMES {
+            info!(
+                "frame {}: render {} us, upload {} us, {} px in {} rect(s), {} transfer(s)",
+                frame_number,
+                frame.render_us,
+                frame.upload_us,
+                frame.pixels,
+                frame.rects,
+                frame.transfers
+            );
+            return;
+        }
+
+        self.frames += 1;
+        self.render_us += u64::from(frame.render_us);
+        self.upload_us += u64::from(frame.upload_us);
+        self.pixels += frame.pixels;
+        self.transfers += u64::from(frame.transfers);
+        self.worst_render_us = self.worst_render_us.max(frame.render_us);
+        self.worst_upload_us = self.worst_upload_us.max(frame.upload_us);
+
+        if self.frames < SUMMARY_FRAMES {
+            return;
+        }
+
+        debug!(
+            "{} frames: render {} us avg / {} us worst, upload {} us avg / {} us worst, {} px, {} transfers",
+            self.frames,
+            self.render_us / u64::from(self.frames),
+            self.worst_render_us,
+            self.upload_us / u64::from(self.frames),
+            self.worst_upload_us,
+            self.pixels,
+            self.transfers
+        );
+        *self = Self::default();
+    }
 }
 
 static TOUCH_EVENTS: Channel<CriticalSectionRawMutex, TouchState, 8> = Channel::new();
@@ -607,6 +683,7 @@ async fn main(spawner: Spawner) -> ! {
     let started_at = Instant::now();
     let mut displayed_second = u64::MAX;
     let mut rendered_frames = 0_u32;
+    let mut frame_stats = FrameStats::default();
     let mut last_touch_position = None;
     let mut touch_ready = false;
     let mut pmic_ready = false;
@@ -763,14 +840,25 @@ async fn main(spawner: Spawner) -> ! {
         }
 
         let mut present_failed = false;
+        let mut frame = FrameTiming::default();
         let rendered = slint_window.draw_if_needed(|renderer| {
             renderer.set_dirty_region_alignment(DirtyRegionAlignment::new(2, 2));
+
+            let render_start = HalInstant::now();
             let region = renderer.render(&mut framebuffer, DISPLAY_WIDTH_USIZE);
-            if display
-                .write_region(&framebuffer, DISPLAY_WIDTH_USIZE, &region)
-                .is_err()
-            {
-                present_failed = true;
+            let upload_start = HalInstant::now();
+            let transfers = display.write_region(&framebuffer, DISPLAY_WIDTH_USIZE, &region);
+            let upload_end = HalInstant::now();
+
+            frame.render_us = (upload_start - render_start).as_micros() as u32;
+            frame.upload_us = (upload_end - upload_start).as_micros() as u32;
+            (frame.pixels, frame.rects) =
+                region.iter().fold((0, 0), |(pixels, rects), (_, size)| {
+                    (pixels + size.width as u64 * size.height as u64, rects + 1)
+                });
+            match transfers {
+                Ok(transfers) => frame.transfers = transfers,
+                Err(_) => present_failed = true,
             }
         });
         if present_failed {
@@ -786,6 +874,7 @@ async fn main(spawner: Spawner) -> ! {
             } else if rendered_frames == 2 {
                 info!("First partial Slint frame rendered");
             }
+            frame_stats.record(rendered_frames, frame);
         }
 
         if !application_ready_logged

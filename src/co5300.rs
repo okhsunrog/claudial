@@ -144,17 +144,21 @@ impl<'d> Co5300<'d> {
     ///   even origin and even extent the controller requires,
     /// - the buffer is large enough for the stride, which `render` asserts
     ///   before returning.
+    ///
+    /// Returns how many DMA transfers the upload took, which is what the row
+    /// coalescing below is meant to reduce.
     pub fn write_region(
         &mut self,
         framebuffer: &[Rgb565BigEndianPixel],
         stride: usize,
         region: &PhysicalRegion,
-    ) -> Result<(), Error> {
+    ) -> Result<u32, Error> {
         debug_assert!(
             stride >= self.width as usize && framebuffer.len() >= stride * self.height as usize,
             "framebuffer smaller than the panel"
         );
 
+        let mut transfers = 0_u32;
         for (position, size) in region.iter() {
             let x = u16::try_from(position.x).map_err(|_| Error::InvalidRegion)?;
             let y = u16::try_from(position.y).map_err(|_| Error::InvalidRegion)?;
@@ -177,6 +181,7 @@ impl<'d> Co5300<'d> {
 
             self.chip_select.set_low();
             let mut first_chunk = true;
+            let mut issued = 0_u32;
             let transfer_result = (|| {
                 let first_row = y as usize;
                 let last_row = first_row + height as usize;
@@ -212,14 +217,16 @@ impl<'d> Co5300<'d> {
                     self.spi
                         .half_duplex_write(DataMode::Quad, command, address, 0, bytes)?;
                     first_chunk = false;
+                    issued += 1;
                 }
                 Ok::<(), spi::Error>(())
             })();
             self.chip_select.set_high();
             transfer_result?;
+            transfers += issued;
         }
 
-        Ok(())
+        Ok(transfers)
     }
 
     fn set_address_window(&mut self, x: u16, y: u16, width: u16, height: u16) -> Result<(), Error> {

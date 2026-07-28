@@ -44,6 +44,30 @@ The AXP2101 setup intentionally changes no board-specific regulator rails. It
 only enables battery detection and the ADC channels used for telemetry.
 Brightness is independent of the PMIC on this AMOLED board.
 
+## Measured frame cost
+
+The firmware times rendering and panel upload separately. The first eight
+frames are logged at `info` as a boot benchmark; set `DEFMT_LOG=debug` for
+rolling batch summaries. Release build, 240 MHz, 40 MHz QSPI:
+
+| | full frame | typical partial update |
+|---|---|---|
+| pixels | 230 400 | 700 – 1 800 |
+| render | 124 ms | 4.4 – 5.2 ms |
+| upload | 47 ms | 0.5 – 0.8 ms |
+| DMA transfers | 60 | one per row |
+
+Rendering dominates everywhere: 72 % of a full frame and roughly 88 % of a
+small update. Two separate costs make it up — about 0.6 µs per pixel, and a
+fixed ~4 ms per frame that does not scale with the dirty region at all, so a
+700-pixel update spends under half a millisecond on pixels.
+
+Full-frame upload runs at 9.7 MB/s, near half the 20 MB/s ceiling for four
+lines at 40 MHz, and is bandwidth-bound rather than transfer-bound. Row
+coalescing cuts a full frame from 480 transfers to 60, which is worth roughly
+17 % of the upload; narrow rectangles stay overhead-bound at 20 – 35 µs per
+transfer regardless of payload.
+
 ## Source layout
 
 - `src/board.rs` — dimensions, buses, and board pin assignments
