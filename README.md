@@ -16,9 +16,11 @@ rounded-corner safe area.
 - 8 MiB octal PSRAM allocator
 - CO5300 reset and official Waveshare initialization sequence
 - RGB565 big-endian partial framebuffer uploads over QSPI at 40 MHz
+- full-stride rectangles coalesced into whole-DMA-buffer transfers
 - 2 × 2 aligned Slint dirty regions
 - CST9220 touch input over the shared 400 kHz I²C bus
 - interrupt-driven Slint pointer events (`TP_INT=GPIO11`, `TP_RST=GPIO40`)
+- a dropped touch release edge is recovered by re-polling the controller
 - AXP2101 battery, VBUS, VSYS, state-of-charge, and die-temperature telemetry
 - PCF85063ATL battery-backed clock with oscillator-state detection
 - on-device date and time editor with write-back verification
@@ -53,23 +55,17 @@ Brightness is independent of the PMIC on this AMOLED board.
 
 ## Build
 
-The project intentionally uses the sibling Slint checkout:
-
-```text
-/home/okhsunrog/code/rust/slint
-/home/okhsunrog/code/rust/waveshare-esp32s3-amoled-2-16
-```
-
-Clone both repositories as siblings and check out Slint's
-`dirty-region-alignment` branch:
-
 ```sh
-git clone https://github.com/okhsunrog/slint.git
-git -C slint switch dirty-region-alignment
 git clone https://github.com/okhsunrog/waveshare-esp32s3-amoled-2-16.git
 cd waveshare-esp32s3-amoled-2-16
 cargo build --release
 ```
+
+Cargo fetches everything, including Slint. The dirty-region alignment API the
+CO5300 needs is not in a Slint release yet, so `slint` and `slint-build` come
+from the branch behind [slint-ui/slint#12656][alignment-pr]; `Cargo.lock` pins
+the exact commit. Once the API lands in a release, both can move back to
+crates.io.
 
 The generated runner uses the ESP32-S3 USB-JTAG interface:
 
@@ -80,5 +76,6 @@ cargo run --release
 Hardware values and the initialization sequence are based on the
 [official Waveshare examples][vendor-repo].
 
+[alignment-pr]: https://github.com/slint-ui/slint/pull/12656
 [board-docs]: https://docs.waveshare.com/ESP32-S3-Touch-AMOLED-2.16
 [vendor-repo]: https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-2.16

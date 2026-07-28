@@ -62,12 +62,16 @@ static_cell      = "2.1.1"
 bytemuck         = "1.25.0"
 embedded-hal     = "1.0"
 time             = { version = "0.3.47", default-features = false }
-slint = { path = "../slint/api/rs/slint", default-features = false, features = [
+# Slint is taken from the branch behind slint-ui/slint#12656, which adds the
+# dirty-region alignment API the CO5300 needs. Switch back to crates.io once it
+# lands in a release. Cargo.lock pins the exact commit.
+slint = { git = "https://github.com/okhsunrog/slint.git", branch = "dirty-region-alignment", default-features = false, features = [
   "compat-1-2",
   "libm",
   "renderer-software",
   "unsafe-single-threaded",
 ] }
+embassy-futures = "0.1.2"
 
 [dev-dependencies]
 embedded-test = { version = "0.7.1", features = [
@@ -76,9 +80,6 @@ embedded-test = { version = "0.7.1", features = [
   "external-executor",
   "xtensa-semihosting",
 ] }
-
-[build-dependencies]
-slint-build = { path = "../slint/api/rs/build" }
 
 # For fine tuning these settings, please refer to https://doc.rust-lang.org/cargo/reference/profiles.html
 [profile.dev]
@@ -91,3 +92,6 @@ codegen-units = 1     # LLVM can perform better optimizations using a single thr
 debug         = 2     # prefer slower builds but better debugging experience
 lto           = 'fat'
 opt-level     = 's'
+
+[build-dependencies]
+slint-build = { git = "https://github.com/okhsunrog/slint.git", branch = "dirty-region-alignment" }

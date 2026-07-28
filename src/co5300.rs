@@ -12,6 +12,13 @@ use esp_hal::spi;
 use esp_hal::spi::master::{Address, Command, DataMode, SpiDmaBus};
 use slint::platform::software_renderer::{PhysicalRegion, Rgb565BigEndianPixel};
 
+/// Largest pixel payload the driver puts into a single DMA transfer.
+///
+/// `SpiDmaBus::half_duplex_write` rejects a slice larger than the DMA transmit
+/// buffer it was constructed with, so the SPI bus handed to [`Co5300::new`]
+/// must be built with buffers of at least this size.
+pub const MAX_TRANSFER_BYTES: usize = 7680;
+
 const QSPI_WRITE_COMMAND: u16 = 0x02;
 const QSPI_WRITE_PIXELS: u16 = 0x32;
 const QSPI_MEMORY_CONTINUE_ADDRESS: u32 = 0x00_3c_00;
@@ -124,31 +131,71 @@ impl<'d> Co5300<'d> {
 
     /// Send every rectangle rendered by Slint to the panel.
     ///
-    /// CO5300 requires even start coordinates and even dimensions. Slint's
-    /// `DirtyRegionAlignment(2, 2)` guarantees that invariant; it is checked
-    /// again here before any panel command is emitted.
+    /// The caller must pass the same buffer, stride, and region that
+    /// `SoftwareRenderer::render` just produced, for a window sized to this
+    /// panel. Under that contract Slint has already guaranteed everything the
+    /// CO5300 needs, so nothing is re-validated on this hot path:
+    ///
+    /// - rectangles are clipped to the window (`to_physical_region` intersects
+    ///   each box with the screen rect) and are never empty,
+    /// - with `DirtyRegionAlignment(2, 2)` on a panel whose dimensions are a
+    ///   multiple of 2, `snap_interval_to_grid` rounds each edge outwards to an
+    ///   even coordinate and clamps the far edge to the panel size, giving the
+    ///   even origin and even extent the controller requires,
+    /// - the buffer is large enough for the stride, which `render` asserts
+    ///   before returning.
     pub fn write_region(
         &mut self,
         framebuffer: &[Rgb565BigEndianPixel],
         stride: usize,
         region: &PhysicalRegion,
     ) -> Result<(), Error> {
+        debug_assert!(
+            stride >= self.width as usize && framebuffer.len() >= stride * self.height as usize,
+            "framebuffer smaller than the panel"
+        );
+
         for (position, size) in region.iter() {
             let x = u16::try_from(position.x).map_err(|_| Error::InvalidRegion)?;
             let y = u16::try_from(position.y).map_err(|_| Error::InvalidRegion)?;
             let width = u16::try_from(size.width).map_err(|_| Error::InvalidRegion)?;
             let height = u16::try_from(size.height).map_err(|_| Error::InvalidRegion)?;
 
-            self.validate_region(x, y, width, height, framebuffer.len(), stride)?;
+            // Catches the one thing Slint cannot: this panel's dimensions
+            // drifting apart from the window size the renderer was given.
+            debug_assert!(
+                (x | y | width | height) & 1 == 0
+                    && width > 0
+                    && height > 0
+                    && x + width <= self.width
+                    && y + height <= self.height,
+                "region rectangle is not an even, in-bounds sub-rectangle of the panel"
+            );
+
             self.set_address_window(x, y, width, height)?;
             self.write_command(MEMORY_WRITE_START, &[])?;
 
             self.chip_select.set_low();
             let mut first_chunk = true;
             let transfer_result = (|| {
-                for row in y as usize..(y + height) as usize {
-                    let begin = row * stride + x as usize;
-                    let end = begin + width as usize;
+                let first_row = y as usize;
+                let last_row = first_row + height as usize;
+
+                // A rectangle spanning the full stride has contiguous rows, so
+                // it can go out in transfers as large as the DMA buffer allows
+                // instead of one per row. The controller keeps filling the
+                // address window across transfers, so only the first carries a
+                // command and address either way.
+                let rows_per_chunk = if x == 0 && width as usize == stride {
+                    (MAX_TRANSFER_BYTES / (width as usize * 2)).max(1)
+                } else {
+                    1
+                };
+
+                for chunk_start in (first_row..last_row).step_by(rows_per_chunk) {
+                    let chunk_rows = rows_per_chunk.min(last_row - chunk_start);
+                    let begin = chunk_start * stride + x as usize;
+                    let end = begin + chunk_rows * width as usize;
                     let bytes = cast_slice(&framebuffer[begin..end]);
 
                     let command = if first_chunk {
@@ -170,35 +217,6 @@ impl<'d> Co5300<'d> {
             })();
             self.chip_select.set_high();
             transfer_result?;
-        }
-
-        Ok(())
-    }
-
-    fn validate_region(
-        &self,
-        x: u16,
-        y: u16,
-        width: u16,
-        height: u16,
-        framebuffer_len: usize,
-        stride: usize,
-    ) -> Result<(), Error> {
-        let end_x = x.checked_add(width).ok_or(Error::InvalidRegion)?;
-        let end_y = y.checked_add(height).ok_or(Error::InvalidRegion)?;
-
-        if width == 0
-            || height == 0
-            || !x.is_multiple_of(2)
-            || !y.is_multiple_of(2)
-            || !width.is_multiple_of(2)
-            || !height.is_multiple_of(2)
-            || end_x > self.width
-            || end_y > self.height
-            || stride < self.width as usize
-            || framebuffer_len < stride * self.height as usize
-        {
-            return Err(Error::InvalidRegion);
         }
 
         Ok(())

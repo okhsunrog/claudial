@@ -15,6 +15,7 @@ use cst92xx::CST92xx;
 use defmt::{error, info};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
+use embassy_futures::select::{Either, select};
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 use embassy_sync::channel::Channel;
 use embassy_sync::mutex::Mutex;
@@ -40,7 +41,7 @@ use slint::platform::{PointerEventButton, WindowEvent};
 use static_cell::StaticCell;
 use trouble_host::prelude::*;
 use waveshare_esp32s3_amoled_2_16::board::{DISPLAY_HEIGHT, DISPLAY_SPI_MHZ, DISPLAY_WIDTH};
-use waveshare_esp32s3_amoled_2_16::co5300::Co5300;
+use waveshare_esp32s3_amoled_2_16::co5300::{self, Co5300};
 use waveshare_esp32s3_amoled_2_16::pmic::{self, PmicStats, PowerKey};
 use waveshare_esp32s3_amoled_2_16::rtc::{self, DateTime as RtcDateTime, Snapshot as RtcSnapshot};
 use waveshare_esp32s3_amoled_2_16::slint_platform::EspPlatform;
@@ -53,9 +54,12 @@ const CONNECTIONS_MAX: usize = 1;
 const L2CAP_CHANNELS_MAX: usize = 1;
 const DISPLAY_WIDTH_USIZE: usize = DISPLAY_WIDTH as usize;
 const FRAMEBUFFER_PIXELS: usize = DISPLAY_WIDTH_USIZE * DISPLAY_HEIGHT as usize;
-const DISPLAY_DMA_BUFFER_SIZE: usize = DISPLAY_WIDTH_USIZE * 8 * 2;
+const DISPLAY_DMA_BUFFER_SIZE: usize = co5300::MAX_TRANSFER_BYTES;
 const DEFAULT_BRIGHTNESS_PERCENT: u8 = 80;
 const MINIMUM_BRIGHTNESS_PERCENT: u8 = 5;
+/// How long the touch controller may stay silent mid-press before the press is
+/// re-checked rather than trusted.
+const TOUCH_RELEASE_TIMEOUT: Duration = Duration::from_millis(250);
 
 type SharedI2cBus = Mutex<NoopRawMutex, I2c<'static, esp_hal::Async>>;
 
@@ -97,11 +101,9 @@ fn brightness_register(percent: u8) -> u8 {
 fn display_coordinates(point: cst92xx::Point) -> (u16, u16) {
     // The official Waveshare demo applies setSwapXY(true) followed by
     // setMirrorXY(true, false) for the panel's 0-degree orientation.
-    let x = DISPLAY_WIDTH
-        .saturating_sub(1)
-        .saturating_sub(point.y.min(DISPLAY_WIDTH.saturating_sub(1)));
-    let y = point.x.min(DISPLAY_HEIGHT.saturating_sub(1));
-    (x, y)
+    const MAX_X: u16 = DISPLAY_WIDTH - 1;
+    const MAX_Y: u16 = DISPLAY_HEIGHT - 1;
+    (MAX_X - point.y.min(MAX_X), point.x.min(MAX_Y))
 }
 
 #[embassy_executor::task]
@@ -128,23 +130,48 @@ async fn touch_task(
     info!("{} touch controller initialized", touch.model_name());
     TOUCH_READY_SIGNAL.signal(true);
 
+    let mut pressed = false;
     loop {
         // CST9220 presents one report per falling edge. Reading repeatedly
         // while INT is still low races the controller's ACK processing and can
         // turn a valid press into an immediate empty report.
-        interrupt.wait_for_falling_edge().await;
+        if pressed {
+            // A dropped release edge would latch the UI in a pressed state
+            // forever. Once the controller has been quiet for the whole
+            // timeout, INT is idle, so re-reading cannot race a report: ask it
+            // directly whether the finger is still down instead of guessing.
+            if let Either::Second(()) = select(
+                interrupt.wait_for_falling_edge(),
+                Timer::after(TOUCH_RELEASE_TIMEOUT),
+            )
+            .await
+            {
+                if matches!(touch.touches().await, Ok(points) if points[0].is_some()) {
+                    continue;
+                }
+                error!("CST92xx release edge missed; synthesizing release");
+                pressed = false;
+                TOUCH_EVENTS.send(TouchState::Released).await;
+                continue;
+            }
+        } else {
+            interrupt.wait_for_falling_edge().await;
+        }
 
         match touch.touches().await {
             Ok(points) => {
                 if let Some(point) = points[0] {
                     let (x, y) = display_coordinates(point);
+                    pressed = true;
                     TOUCH_EVENTS.send(TouchState::Pressed { x, y }).await;
                 } else {
+                    pressed = false;
                     TOUCH_EVENTS.send(TouchState::Released).await;
                 }
             }
             Err(_) => {
                 error!("CST92xx read failed");
+                pressed = false;
                 TOUCH_EVENTS.send(TouchState::Released).await;
             }
         }
@@ -296,13 +323,15 @@ async fn rtc_task(i2c_bus: &'static SharedI2cBus) {
     }
 }
 
+/// Length of an editor month, falling back to 31 while the month field is
+/// mid-edit and not yet a valid month number.
 fn days_in_month(year: i32, month: i32) -> i32 {
-    match month {
-        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
-        2 => 28,
-        4 | 6 | 9 | 11 => 30,
-        _ => 31,
-    }
+    u8::try_from(month)
+        .ok()
+        .and_then(|month| time::Month::try_from(month).ok())
+        .map_or(31, |month| {
+            i32::from(time::util::days_in_month(month, year))
+        })
 }
 
 fn wrap_step(value: i32, delta: i32, minimum: i32, maximum: i32) -> i32 {
@@ -733,13 +762,23 @@ async fn main(spawner: Spawner) -> ! {
             ui.set_uptime(format!("{} s", elapsed_seconds).into());
         }
 
+        let mut present_failed = false;
         let rendered = slint_window.draw_if_needed(|renderer| {
             renderer.set_dirty_region_alignment(DirtyRegionAlignment::new(2, 2));
             let region = renderer.render(&mut framebuffer, DISPLAY_WIDTH_USIZE);
-            display
+            if display
                 .write_region(&framebuffer, DISPLAY_WIDTH_USIZE, &region)
-                .unwrap();
+                .is_err()
+            {
+                present_failed = true;
+            }
         });
+        if present_failed {
+            // The framebuffer holds the frame the panel never received, so the
+            // damage must be re-sent rather than dropped.
+            error!("CO5300 region upload failed; retrying next frame");
+            slint_window.request_redraw();
+        }
         if rendered {
             rendered_frames += 1;
             if rendered_frames == 1 {
