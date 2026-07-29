@@ -202,7 +202,33 @@ component NavButton inherits Rectangle {
     }
 }
 
+// A palette-indexed sprite frame drawn as one rectangle per cell.
+//
+// Modelling cells as elements rather than as a single image is deliberate:
+// Slint derives its dirty region from the items that actually changed, so a
+// frame that only moves a few cells repaints — and uploads to the panel — only
+// those cells. Feeding one big image instead would invalidate the whole
+// element and cost a full-screen QSPI transfer on every frame.
+component SpriteGrid inherits Rectangle {
+    in property <[color]> cells;
+    in property <int> grid: 20;
+    in property <length> cell-size: 15px;
+
+    width: root.grid * root.cell-size;
+    height: root.grid * root.cell-size;
+
+    for cell[i] in root.cells: Rectangle {
+        x: Math.mod(i, root.grid) * root.cell-size;
+        y: Math.floor(i / root.grid) * root.cell-size;
+        width: root.cell-size;
+        height: root.cell-size;
+        background: cell;
+    }
+}
+
 export component MainWindow inherits Window {
+    in property <[color]> sprite-cells;
+    in property <string> sprite-name: "--";
     in property <string> uptime: "0 s";
     in property <string> ble-status: "initialized";
     in property <string> touch-status: "CST9220 starting";
@@ -227,6 +253,7 @@ export component MainWindow inherits Window {
     in-out property <int> brightness-percent: 80;
     in-out property <int> current-page: 0;
     in-out property <bool> show-power-menu: false;
+    callback sprite-next();
     callback brightness-step(int);
     callback rtc-step(int, int);
     callback rtc-save();
@@ -258,7 +285,8 @@ export component MainWindow inherits Window {
             y: 21px;
             text: root.current-page == 0 ? "SYSTEM OVERVIEW" :
                 root.current-page == 1 ? "DISPLAY" :
-                root.current-page == 2 ? "POWER" : "RTC CLOCK";
+                root.current-page == 2 ? "POWER" :
+                root.current-page == 3 ? "RTC CLOCK" : "SPRITE";
             color: #f3f7fa;
             font-size: 22px;
             font-weight: 700;
@@ -766,6 +794,42 @@ export component MainWindow inherits Window {
         }
     }
 
+    if root.current-page == 4 : Rectangle {
+        x: 28px;
+        y: 92px;
+        width: 424px;
+        height: 314px;
+        background: #000000;
+
+        SpriteGrid {
+            x: 62px;
+            y: 4px;
+            cells: root.sprite-cells;
+            cell-size: 15px;
+        }
+
+        TouchArea {
+            x: 62px;
+            y: 4px;
+            width: 300px;
+            height: 300px;
+            clicked => {
+                root.sprite-next();
+            }
+        }
+
+        Text {
+            x: 0px;
+            y: 292px;
+            width: 424px;
+            text: root.sprite-name;
+            color: #5de4c7;
+            font-size: 12px;
+            font-weight: 700;
+            horizontal-alignment: center;
+        }
+    }
+
     Rectangle {
         x: 36px;
         y: 414px;
@@ -813,6 +877,15 @@ export component MainWindow inherits Window {
                 active: root.current-page == 3;
                 clicked => {
                     root.current-page = 3;
+                }
+            }
+
+            NavButton {
+                horizontal-stretch: 1;
+                label: "SPRITE";
+                active: root.current-page == 4;
+                clicked => {
+                    root.current-page = 4;
                 }
             }
         }

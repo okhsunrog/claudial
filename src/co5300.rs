@@ -3,6 +3,27 @@
 //! The controller uses an 8-bit QSPI operation followed by a 24-bit register
 //! address. Commands and parameters are sent on SIO0. Pixel payloads are sent
 //! over all four data lines.
+//!
+//! # No tearing control on this board
+//!
+//! Uploads cannot be synchronised with the panel's scan-out, so a large enough
+//! damaged region shows a visible boundary between the old and new frame while
+//! it is being written. This was chased on hardware and is a dead end:
+//!
+//! - the TE line is tied to GND on this board, so there is no tear signal;
+//! - reading the scanline register `GETSL` (0x45) always returns 0, as does a
+//!   control read of `ID1`, on SIO0 and SIO1 alike and with the official
+//!   `SPIRON` (0x47) read enable, at 10 MHz. No SPI errors, just no data.
+//!
+//! So there is no way to poll the current scanline or wait for vblank, and the
+//! only lever left is keeping damaged regions small — which is a property of
+//! what the UI animates, not of this transport. Resist the temptation to add
+//! upload-order tricks here: writing in vertical strips does remove the
+//! diagonal boundary, but replaces it with a visible left-to-right assembly of
+//! the frame, which reads worse.
+//!
+//! The 40 MHz clock is deliberate. The datasheet's minimum write clock period
+//! of 20 ns puts the ceiling at 50 MHz, so 80 MHz would be out of spec.
 
 use bytemuck::cast_slice;
 use embedded_hal::delay::DelayNs;

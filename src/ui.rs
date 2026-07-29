@@ -3,13 +3,15 @@
 
 extern crate alloc;
 
-use alloc::format;
-use slint::PhysicalPosition;
+use alloc::rc::Rc;
+use alloc::{format, vec};
 use slint::platform::software_renderer::MinimalSoftwareWindow;
 use slint::platform::{PointerEventButton, WindowEvent};
+use slint::{Color, Model, PhysicalPosition, VecModel};
 
+use crate::animation::{Animation, CELLS, Frame, PALETTE_LEN};
 use crate::co5300::MINIMUM_BRIGHTNESS_PERCENT;
-use crate::events::{BrightnessSignal, PmicChannels, RtcChannels, TouchState};
+use crate::events::{BrightnessSignal, PmicChannels, RtcChannels, SpriteSignal, TouchState};
 use crate::rtc::{DateTime as RtcDateTime, Snapshot as RtcSnapshot};
 
 slint::include_modules!();
@@ -107,9 +109,11 @@ pub fn dispatch_touch_state(
 pub fn connect_callbacks(
     ui: &MainWindow,
     brightness: &'static BrightnessSignal,
+    sprite_next: &'static SpriteSignal,
     pmic: &'static PmicChannels,
     rtc: &'static RtcChannels,
 ) {
+    ui.on_sprite_next(move || sprite_next.signal(()));
     let ui_weak = ui.as_weak();
     ui.on_brightness_step(move |delta| {
         if let Some(ui) = ui_weak.upgrade() {
@@ -163,4 +167,25 @@ pub fn connect_callbacks(
         ui.set_rtc_status("Saving...".into());
         rtc.set.signal(request);
     });
+}
+
+/// Backing model for the sprite grid: one colour per cell.
+pub fn sprite_model() -> Rc<VecModel<Color>> {
+    Rc::new(VecModel::from(vec![Color::from_rgb_u8(0, 0, 0); CELLS]))
+}
+
+/// Push a frame into the cell model, writing only the cells that changed.
+///
+/// The comparison is the whole point. Assigning every row unconditionally
+/// would mark all 400 rectangles dirty, so each frame would repaint and upload
+/// the entire grid; comparing first means a frame that moves a few cells costs
+/// a few cells.
+pub fn push_sprite_frame(model: &VecModel<Color>, animation: &Animation, frame: &Frame) {
+    for (i, &code) in frame.cells.iter().enumerate() {
+        let [r, g, b] = animation.palette[usize::from(code).min(PALETTE_LEN - 1)];
+        let color = Color::from_rgb_u8(r, g, b);
+        if model.row_data(i) != Some(color) {
+            model.set_row_data(i, color);
+        }
+    }
 }

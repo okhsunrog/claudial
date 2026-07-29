@@ -1,5 +1,7 @@
 #![no_std]
 
+pub mod animation;
+pub mod animations;
 pub mod board;
 pub mod co5300;
 pub mod events;

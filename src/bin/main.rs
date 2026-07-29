@@ -32,18 +32,20 @@ use slint::platform::software_renderer::{
 };
 use static_cell::StaticCell;
 use trouble_host::prelude::*;
+use waveshare_esp32s3_amoled_2_16::animation::Player;
+use waveshare_esp32s3_amoled_2_16::animations::ANIMATIONS;
 use waveshare_esp32s3_amoled_2_16::board::{DISPLAY_HEIGHT, DISPLAY_SPI_MHZ, DISPLAY_WIDTH};
 use waveshare_esp32s3_amoled_2_16::co5300::{self, Co5300, brightness_register};
 use waveshare_esp32s3_amoled_2_16::events::{
-    BrightnessSignal, PmicChannels, PmicEvent, RtcChannels, RtcEvent, TouchChannels, TouchState,
-    UiEvent, next_ui_event,
+    BrightnessSignal, PmicChannels, PmicEvent, RtcChannels, RtcEvent, SpriteSignal, TouchChannels,
+    TouchState, UiChannels, UiEvent, next_ui_event,
 };
 use waveshare_esp32s3_amoled_2_16::frame_stats::{FrameStats, FrameTiming};
 use waveshare_esp32s3_amoled_2_16::pmic::PowerKey;
 use waveshare_esp32s3_amoled_2_16::slint_platform::EspPlatform;
 use waveshare_esp32s3_amoled_2_16::tasks::{SharedI2cBus, pmic_task, rtc_task, touch_task};
 use waveshare_esp32s3_amoled_2_16::ui::{
-    self, MainWindow, dispatch_touch_state, update_rtc_display,
+    self, MainWindow, dispatch_touch_state, push_sprite_frame, update_rtc_display,
 };
 
 extern crate alloc;
@@ -62,6 +64,10 @@ static TOUCH: TouchChannels = TouchChannels::new();
 static PMIC: PmicChannels = PmicChannels::new();
 static RTC: RtcChannels = RtcChannels::new();
 static BRIGHTNESS: BrightnessSignal = BrightnessSignal::new();
+static SPRITE_NEXT: SpriteSignal = SpriteSignal::new();
+
+/// Page index of the sprite screen in the Slint nav bar.
+const SPRITE_PAGE: i32 = 4;
 
 async fn wake_display(
     display: &mut Co5300<'_>,
@@ -202,7 +208,23 @@ async fn main(spawner: Spawner) -> ! {
     let ui = MainWindow::new().unwrap();
     ui.set_ble_status("initialized".into());
     ui.set_brightness_percent(i32::from(DEFAULT_BRIGHTNESS_PERCENT));
-    ui::connect_callbacks(&ui, &BRIGHTNESS, &PMIC, &RTC);
+    ui::connect_callbacks(&ui, &BRIGHTNESS, &SPRITE_NEXT, &PMIC, &RTC);
+
+    let channels = UiChannels {
+        touch: &TOUCH,
+        pmic: &PMIC,
+        rtc: &RTC,
+        brightness: &BRIGHTNESS,
+        sprite_next: &SPRITE_NEXT,
+    };
+
+    let sprite_cells = ui::sprite_model();
+    ui.set_sprite_cells(sprite_cells.clone().into());
+    let mut sprite_index = 0;
+    let mut sprite = Player::new(ANIMATIONS[sprite_index]);
+    ui.set_sprite_name(sprite.animation().name.into());
+    push_sprite_frame(&sprite_cells, sprite.animation(), sprite.frame());
+    let mut sprite_deadline = Instant::now() + sprite.hold();
     let started_at = Instant::now();
     let mut displayed_second = u64::MAX;
     let mut rendered_frames = 0_u32;
@@ -274,13 +296,15 @@ async fn main(spawner: Spawner) -> ! {
         // Sleep until a peripheral reports in, the uptime second rolls over,
         // or an animation is due for its next step. Nothing is polled.
         let animation = slint::platform::duration_until_next_timer_update();
+        // Only run the sprite clock while its page is actually showing; off the
+        // page there is no deadline and the branch waits for a tap instead.
+        let active_sprite_deadline =
+            (display_on && ui.get_current_page() == SPRITE_PAGE).then_some(sprite_deadline);
         let event = next_ui_event(
-            &TOUCH,
-            &PMIC,
-            &RTC,
-            &BRIGHTNESS,
+            &channels,
             &mut uptime_ticker,
             animation,
+            active_sprite_deadline,
         )
         .await;
 
@@ -422,6 +446,19 @@ async fn main(spawner: Spawner) -> ! {
                     displayed_second = elapsed_seconds;
                     ui.set_uptime(format!("{} s", elapsed_seconds).into());
                 }
+            }
+            UiEvent::SpriteFrame => {
+                sprite.advance();
+                push_sprite_frame(&sprite_cells, sprite.animation(), sprite.frame());
+                sprite_deadline = Instant::now() + sprite.hold();
+            }
+            UiEvent::SpriteNext => {
+                sprite_index = (sprite_index + 1) % ANIMATIONS.len();
+                sprite.set_animation(ANIMATIONS[sprite_index]);
+                ui.set_sprite_name(sprite.animation().name.into());
+                push_sprite_frame(&sprite_cells, sprite.animation(), sprite.frame());
+                sprite_deadline = Instant::now() + sprite.hold();
+                info!("Sprite animation: {}", sprite.animation().name);
             }
             UiEvent::Animation => {}
         }

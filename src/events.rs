@@ -1,16 +1,18 @@
 //! Events flowing from the peripheral tasks to the UI loop, and the endpoints
 //! they travel over.
 
-use embassy_futures::select::{Either, Either4, select, select4};
+use embassy_futures::select::{Either, Either3, Either4, select, select3, select4};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
-use embassy_time::{Duration, Ticker, Timer};
+use embassy_time::{Duration, Instant, Ticker, Timer};
 
 use crate::pmic::{PmicStats, PowerKey};
 use crate::rtc::{DateTime as RtcDateTime, Snapshot as RtcSnapshot};
 
 pub type BrightnessSignal = Signal<CriticalSectionRawMutex, u8>;
+/// Raised by the UI when the sprite page is tapped.
+pub type SpriteSignal = Signal<CriticalSectionRawMutex, ()>;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum TouchState {
@@ -102,23 +104,52 @@ pub enum UiEvent {
     Brightness(u8),
     Uptime,
     Animation,
+    /// The current sprite frame has been held long enough.
+    SpriteFrame,
+    /// The user asked for the next sprite animation.
+    SpriteNext,
+}
+
+/// Every endpoint the UI loop waits on, bundled so the wait keeps a readable
+/// signature as sources are added.
+pub struct UiChannels {
+    pub touch: &'static TouchChannels,
+    pub pmic: &'static PmicChannels,
+    pub rtc: &'static RtcChannels,
+    pub brightness: &'static BrightnessSignal,
+    pub sprite_next: &'static SpriteSignal,
 }
 
 /// Wait until one of the things the UI cares about happens.
 ///
 /// Each branch resolves straight to a [`UiEvent`], so the nested `select`
 /// results collapse with a single or-pattern instead of a match over every
-/// coordinate. Nothing is swallowed by a losing branch either: a cancelled
+/// coordinate.
+///
+/// Cancellation is the thing to be careful about: whichever branch wins, every
+/// other future is dropped, and this whole wait is rebuilt from scratch on the
+/// next iteration. Signals, channels and tickers survive that — a cancelled
 /// `Signal::wait` leaves its value latched, a dropped `Channel::receive`
-/// consumes nothing, and a dropped `Ticker::next` keeps its deadline.
+/// consumes nothing, and `Ticker` keeps its own deadline. A relative
+/// `Timer::after` does not: it starts counting again from zero.
+///
+/// So any deadline that has to survive cancellation is passed in as an
+/// absolute [`Instant`]. The Slint animation deadline is the one exception
+/// that may stay relative, because the caller recomputes it from Slint's own
+/// schedule immediately before every call.
 pub async fn next_ui_event(
-    touch: &'static TouchChannels,
-    pmic: &'static PmicChannels,
-    rtc: &'static RtcChannels,
-    brightness: &'static BrightnessSignal,
+    channels: &UiChannels,
     uptime: &mut Ticker,
     animation: Option<core::time::Duration>,
+    sprite_deadline: Option<Instant>,
 ) -> UiEvent {
+    let UiChannels {
+        touch,
+        pmic,
+        rtc,
+        brightness,
+        sprite_next,
+    } = channels;
     let peripherals = select4(
         async { UiEvent::PowerKey(pmic.power_key.wait().await) },
         async { UiEvent::TouchReady(touch.ready.wait().await) },
@@ -145,12 +176,31 @@ pub async fn next_ui_event(
         },
     );
 
-    match select(peripherals, rest).await {
-        Either::First(event) | Either::Second(event) => match event {
+    // The sprite page is the only source with a data-dependent deadline. Keep
+    // it absolute: this future is recreated whenever any other event wins the
+    // select, and a relative timer would restart the frame hold every time.
+    // When the page is not showing there is no deadline, and only a tap can
+    // wake this branch.
+    let sprite = async {
+        match sprite_deadline {
+            Some(deadline) => match select(Timer::at(deadline), sprite_next.wait()).await {
+                Either::First(()) => UiEvent::SpriteFrame,
+                Either::Second(()) => UiEvent::SpriteNext,
+            },
+            None => {
+                sprite_next.wait().await;
+                UiEvent::SpriteNext
+            }
+        }
+    };
+
+    match select3(peripherals, rest, sprite).await {
+        Either3::First(event) | Either3::Second(event) => match event {
             Either4::First(event)
             | Either4::Second(event)
             | Either4::Third(event)
             | Either4::Fourth(event) => event,
         },
+        Either3::Third(event) => event,
     }
 }
