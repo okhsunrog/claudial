@@ -70,12 +70,22 @@ transfer regardless of payload.
 
 ## Source layout
 
-- `src/board.rs` — dimensions, buses, and board pin assignments
-- `src/co5300.rs` — CO5300 QSPI transport and aligned region uploads
+- `src/bin/main.rs` — hardware setup, task wiring, and the UI event loop
+- `src/board.rs` — panel dimensions and the board pin table
+- `src/co5300.rs` — CO5300 QSPI transport, aligned region uploads, brightness
+- `src/events.rs` — task-to-UI events and the wait that drives the loop
+- `src/frame_stats.rs` — per-frame render and upload timing
 - `src/pmic.rs` — conservative AXP2101 setup and telemetry
 - `src/rtc.rs` — PCF85063 probe, calendar reads, and date/time conversion
 - `src/slint_platform.rs` — minimal Slint platform adapter
+- `src/tasks.rs` — touch, PMIC, and RTC tasks
+- `src/ui.rs` — generated Slint types, display helpers, callback wiring
 - `ui/main.slint` — rounded-safe interactive AMOLED UI
+
+The UI loop waits rather than polls: it sleeps until a peripheral task reports
+in, the uptime second rolls over, or an animation is due. Each task owns its
+peripheral and publishes to the channel group it is handed, so `main` is the
+only place that decides which task talks to what.
 
 ## Build
 
