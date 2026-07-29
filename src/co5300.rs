@@ -12,6 +12,16 @@ use esp_hal::spi;
 use esp_hal::spi::master::{Address, Command, DataMode, SpiDmaBus};
 use slint::platform::software_renderer::{PhysicalRegion, Rgb565BigEndianPixel};
 
+/// Dimmest setting the UI offers. The panel is legible below this, but the
+/// steppers would otherwise walk it down to fully black.
+pub const MINIMUM_BRIGHTNESS_PERCENT: u8 = 5;
+
+/// Map a percentage onto the panel's `0x51` brightness register.
+pub fn brightness_register(percent: u8) -> u8 {
+    let percent = percent.clamp(MINIMUM_BRIGHTNESS_PERCENT, 100);
+    ((u16::from(percent) * u16::from(u8::MAX) + 50) / 100) as u8
+}
+
 /// Largest pixel payload the driver puts into a single DMA transfer.
 ///
 /// `SpiDmaBus::half_duplex_write` rejects a slice larger than the DMA transmit
