@@ -1,25 +1,31 @@
 //! Host daemon: pushes Claude Code usage to a Clawdmeter over BLE.
 //!
-//! The usage source is not wired up yet — this publishes a synthetic snapshot
-//! so the link can be exercised end to end before the API polling lands. When
-//! it does, the shape is already fixed by how the credential works: Claude Code
-//! rotates the OAuth access token, so it has to be re-read from the credential
-//! store on every poll rather than cached at startup. That is the whole reason
-//! this runs on the host rather than on a device that cannot refresh a token it
+//! Usage is read from the `anthropic-ratelimit-*` headers of a deliberately
+//! tiny API request — there is no usage endpoint, so the completion is thrown
+//! away and the headers are the payload.
+//!
+//! The credential is re-read on every poll rather than cached: Claude Code
+//! rotates the OAuth access token. That single fact is why this runs on the
+//! host instead of on a device, which would have no way to refresh a token it
 //! was handed once.
 
+mod credentials;
 mod transport;
+mod usage;
 
 use std::time::Duration;
 
 use anyhow::Result;
-use clawdmeter_icd::{UsageSnapshot, UsageStatus, UsageTopic};
+use clawdmeter_icd::UsageTopic;
 use ergot::interface_manager::{InterfaceState, Profile};
 use tracing::{info, warn};
 
-/// How often a snapshot goes out. The upstream project polls every 60 s; the
-/// synthetic source has no reason to be slower.
-const PUBLISH_INTERVAL: Duration = Duration::from_secs(5);
+use crate::usage::UsageClient;
+
+/// How often usage is polled and published. Each poll is one near-free API
+/// request, so this matches the upstream project's cadence rather than going
+/// faster.
+const POLL_INTERVAL: Duration = Duration::from_secs(60);
 const SCAN_TIMEOUT: Duration = Duration::from_secs(30);
 const RETRY_DELAY: Duration = Duration::from_secs(5);
 
@@ -33,12 +39,11 @@ async fn main() -> Result<()> {
         .init();
 
     let (stack, queue) = transport::new_stack();
+    let usage = UsageClient::new()?;
     let mut workers = Vec::new();
 
-    warn!("publishing synthetic usage — API polling is not implemented yet");
-
     loop {
-        if let Err(e) = session(&stack, &queue, &mut workers).await {
+        if let Err(e) = session(&stack, &queue, &usage, &mut workers).await {
             warn!("{e:#}");
         }
         tokio::time::sleep(RETRY_DELAY).await;
@@ -49,23 +54,32 @@ async fn main() -> Result<()> {
 async fn session(
     stack: &transport::Stack,
     queue: &ergot::interface_manager::utils::std::StdQueue,
+    usage: &UsageClient,
     workers: &mut Vec<tokio::task::JoinHandle<()>>,
 ) -> Result<()> {
     let device = transport::find_device(SCAN_TIMEOUT).await?;
     transport::connect(stack, queue, &device, workers).await?;
 
-    let mut tick = 0_u32;
     while link_is_up(stack) {
-        let snapshot = synthetic_snapshot(tick);
-        match stack.topics().broadcast::<UsageTopic>(&snapshot, None) {
-            Ok(()) => info!(
-                "published session {}% weekly {}%",
-                snapshot.session_pct, snapshot.weekly_pct
-            ),
-            Err(e) => warn!("publish failed: {e:?}"),
+        // Re-read the token every poll — Claude Code rotates it, so a value
+        // cached at startup eventually starts returning 401.
+        match credentials::read_access_token() {
+            Ok(token) => match usage.poll(&token).await {
+                Ok(snapshot) => match stack.topics().broadcast::<UsageTopic>(&snapshot, None) {
+                    Ok(()) => info!(
+                        "session {}% (resets in {} min), weekly {}% (resets in {} min)",
+                        snapshot.session_pct,
+                        snapshot.session_reset_mins,
+                        snapshot.weekly_pct,
+                        snapshot.weekly_reset_mins
+                    ),
+                    Err(e) => warn!("publish failed: {e:?}"),
+                },
+                Err(e) => warn!("{e:#}"),
+            },
+            Err(e) => warn!("{e:#}"),
         }
-        tick = tick.wrapping_add(1);
-        tokio::time::sleep(PUBLISH_INTERVAL).await;
+        tokio::time::sleep(POLL_INTERVAL).await;
     }
 
     warn!("link went down");
@@ -74,21 +88,4 @@ async fn session(
 
 fn link_is_up(stack: &transport::Stack) -> bool {
     stack.manage_profile(|im| matches!(im.interface_state(()), Some(InterfaceState::Active { .. })))
-}
-
-/// A moving synthetic reading, so the display visibly changes between pushes
-/// and a stuck value is obvious.
-fn synthetic_snapshot(tick: u32) -> UsageSnapshot {
-    let session = (tick * 7 % 101) as u8;
-    UsageSnapshot {
-        session_pct: session,
-        session_reset_mins: 300 - u16::from(session).min(299),
-        weekly_pct: (tick * 3 % 101) as u8,
-        weekly_reset_mins: 7200 - (tick % 60) as u16,
-        status: if session > 90 {
-            UsageStatus::Limited
-        } else {
-            UsageStatus::Allowed
-        },
-    }
 }

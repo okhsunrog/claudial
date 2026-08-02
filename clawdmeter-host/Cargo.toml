@@ -16,6 +16,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 # The upstream bluest lacks fixes this depends on; same fork oxifoc uses.
 bluest = { git = "https://github.com/okhsunrog/bluest", rev = "9cb9dbcad63d7d2ffe18a20f87b7ffe1cb670537", features = ["unstable"] }
+serde_json = "1.0.151"
+dirs = "6.0.0"
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json", "http2", "charset"] }
 
 [lints]
 workspace = true
