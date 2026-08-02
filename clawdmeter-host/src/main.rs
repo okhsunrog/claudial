@@ -56,7 +56,13 @@ async fn session(
     workers: &mut Vec<tokio::task::JoinHandle<()>>,
 ) -> Result<()> {
     let device = transport::find_device(SCAN_TIMEOUT).await?;
-    transport::connect(stack, queue, &device, workers).await?;
+    if let Err(e) = transport::connect(stack, queue, &device, workers).await {
+        // Most likely an adopted link that BlueZ still reports as up but whose
+        // GATT is gone. Tear it down so the next cycle scans instead of
+        // adopting the same dead connection forever.
+        transport::disconnect(&device).await;
+        return Err(e);
+    }
 
     while link_is_up(stack) {
         match usage.poll().await {

@@ -59,12 +59,27 @@ pub fn new_stack() -> (Stack, StdQueue) {
     (stack, queue)
 }
 
-/// Scan until a device advertising [`DEVICE_NAME`] shows up.
+/// Find the Clawdmeter: an existing connection first, an advertisement second.
+///
+/// Looking for an existing connection is not an optimisation. When this daemon
+/// exits, BlueZ keeps the ACL link open, so the device stays connected — and a
+/// connected peripheral stops advertising. A restart would then scan forever
+/// for a device sitting right there, until someone ran `bluetoothctl
+/// disconnect` by hand.
+///
+/// Adopting the link is safe because nothing happened on the device's side: it
+/// still has its GATT connection, so subscribing and writing pick up where the
+/// previous process left off.
 pub async fn find_device(timeout: Duration) -> Result<Device> {
     let adapter = Adapter::default()
         .await
         .context("no BLE adapter available")?;
     adapter.wait_available().await?;
+
+    if let Some(device) = connected_device(&adapter).await {
+        info!("adopting the connection BlueZ still holds to {DEVICE_NAME}");
+        return Ok(device);
+    }
 
     info!("scanning for {DEVICE_NAME}...");
     let mut scan = Box::pin(adapter.scan(&[]).await?);
@@ -81,6 +96,32 @@ pub async fn find_device(timeout: Duration) -> Result<Device> {
     tokio::time::timeout(timeout, search)
         .await
         .map_err(|_| anyhow!("no {DEVICE_NAME} found within {timeout:?}"))?
+}
+
+/// An already-connected device by that name, if BlueZ knows of one.
+///
+/// Matching on the name rather than using `connected_devices_with_services`:
+/// that resolves GATT services for *every* connected peripheral and fails the
+/// whole query if any unrelated one cannot be read. Name is also the same
+/// predicate the scan below uses, so both paths agree on what counts.
+async fn connected_device(adapter: &Adapter) -> Option<Device> {
+    for device in adapter.connected_devices().await.ok()? {
+        if device.name_async().await.ok().as_deref() == Some(DEVICE_NAME) {
+            return Some(device);
+        }
+    }
+    None
+}
+
+/// Best-effort teardown, so a link BlueZ reports as up but that no longer
+/// carries GATT is not adopted again on the next retry.
+pub async fn disconnect(device: &Device) {
+    let Ok(adapter) = Adapter::default().await else {
+        return;
+    };
+    if let Err(e) = adapter.disconnect_device(device).await {
+        debug!("disconnect failed: {e:?}");
+    }
 }
 
 /// Connect, discover NUS, and attach the link to the stack.
