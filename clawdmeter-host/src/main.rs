@@ -1,14 +1,11 @@
-//! Host daemon: pushes Claude Code usage to a Clawdmeter over BLE.
+//! Host daemon: pushes Claude usage to a Clawdmeter over BLE.
 //!
-//! Usage is read from the `anthropic-ratelimit-*` headers of a deliberately
-//! tiny API request — there is no usage endpoint, so the completion is thrown
-//! away and the headers are the payload.
-//!
-//! The credential is re-read on every poll rather than cached: Claude Code
-//! rotates the OAuth access token. That single fact is why this runs on the
-//! host instead of on a device, which would have no way to refresh a token it
-//! was handed once.
+//! Where the numbers come from is a compile-time choice between two backends —
+//! see [`usage`]. Either way it runs on a host rather than on the device,
+//! because both sources need a credential that rotates and the device has no
+//! way to refresh one it was handed once.
 
+#[cfg(all(feature = "direct", not(feature = "proxy")))]
 mod credentials;
 mod transport;
 mod usage;
@@ -22,9 +19,10 @@ use tracing::{info, warn};
 
 use crate::usage::UsageClient;
 
-/// How often usage is polled and published. Each poll is one near-free API
-/// request, so this matches the upstream project's cadence rather than going
-/// faster.
+/// How often usage is polled and published. This matches the upstream
+/// project's cadence rather than going faster: the `direct` backend spends a
+/// (near-free) API request per poll, and the `proxy` backend would just be
+/// re-reading a cache that refreshes on its own schedule.
 const POLL_INTERVAL: Duration = Duration::from_secs(60);
 const SCAN_TIMEOUT: Duration = Duration::from_secs(30);
 const RETRY_DELAY: Duration = Duration::from_secs(5);
@@ -61,21 +59,16 @@ async fn session(
     transport::connect(stack, queue, &device, workers).await?;
 
     while link_is_up(stack) {
-        // Re-read the token every poll — Claude Code rotates it, so a value
-        // cached at startup eventually starts returning 401.
-        match credentials::read_access_token() {
-            Ok(token) => match usage.poll(&token).await {
-                Ok(snapshot) => match stack.topics().broadcast::<UsageTopic>(&snapshot, None) {
-                    Ok(()) => info!(
-                        "session {}% (resets in {} min), weekly {}% (resets in {} min)",
-                        snapshot.session_pct,
-                        snapshot.session_reset_mins,
-                        snapshot.weekly_pct,
-                        snapshot.weekly_reset_mins
-                    ),
-                    Err(e) => warn!("publish failed: {e:?}"),
-                },
-                Err(e) => warn!("{e:#}"),
+        match usage.poll().await {
+            Ok(snapshot) => match stack.topics().broadcast::<UsageTopic>(&snapshot, None) {
+                Ok(()) => info!(
+                    "session {}% (resets in {} min), weekly {}% (resets in {} min)",
+                    snapshot.session_pct,
+                    snapshot.session_reset_mins,
+                    snapshot.weekly_pct,
+                    snapshot.weekly_reset_mins
+                ),
+                Err(e) => warn!("publish failed: {e:?}"),
             },
             Err(e) => warn!("{e:#}"),
         }

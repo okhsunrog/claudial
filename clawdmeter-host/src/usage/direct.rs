@@ -12,6 +12,9 @@ use reqwest::header::HeaderMap;
 use serde_json::json;
 use tracing::debug;
 
+use super::{clamp_minutes, clamp_percent};
+use crate::credentials;
+
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 
 /// The token from Claude Code's credential store is an OAuth token, so it goes
@@ -40,7 +43,11 @@ impl UsageClient {
     }
 
     /// Make the probe request and read usage out of the response headers.
-    pub async fn poll(&self, token: &str) -> Result<UsageSnapshot> {
+    pub async fn poll(&self) -> Result<UsageSnapshot> {
+        // Re-read the token every poll — Claude Code rotates it, so a value
+        // cached at startup eventually starts returning 401.
+        let token = credentials::read_access_token()?;
+
         let response = self
             .http
             .post(API_URL)
@@ -90,7 +97,7 @@ fn header<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
 fn percent(headers: &HeaderMap, name: &str) -> u8 {
     header(headers, name)
         .and_then(|raw| raw.parse::<f64>().ok())
-        .map(|fraction| (fraction * 100.0).round().clamp(0.0, 100.0) as u8)
+        .map(|fraction| clamp_percent(fraction * 100.0))
         .unwrap_or(0)
 }
 
@@ -98,11 +105,7 @@ fn percent(headers: &HeaderMap, name: &str) -> u8 {
 fn minutes_until(headers: &HeaderMap, name: &str) -> u16 {
     header(headers, name)
         .and_then(|raw| raw.parse::<f64>().ok())
-        .map(|reset_at| {
-            ((reset_at - now_secs()) / 60.0)
-                .round()
-                .clamp(0.0, f64::from(u16::MAX)) as u16
-        })
+        .map(|reset_at| clamp_minutes((reset_at - now_secs()) / 60.0))
         .unwrap_or(0)
 }
 

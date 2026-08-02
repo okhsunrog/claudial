@@ -130,6 +130,43 @@ cargo run --release
 Hardware values and the initialization sequence are based on the
 [official Waveshare examples][vendor-repo].
 
+## Host daemon
+
+`clawdmeter-host` polls Claude subscription usage once a minute and publishes
+it to the device over BLE, as one ergot frame per Nordic UART write. It runs on
+a host rather than on the device because every source of these numbers needs a
+credential that rotates, and the device has no way to refresh one it was handed
+once.
+
+Where the numbers come from is a compile-time choice between two backends.
+
+**`direct`** (default) reads Claude Code's own OAuth token from
+`~/.claude/.credentials.json` and makes the smallest possible `/v1/messages`
+request, throwing the completion away and keeping the `anthropic-ratelimit-*`
+response headers. There is no usage endpoint, so the headers are the payload.
+
+```sh
+cargo run --release -p clawdmeter-host
+```
+
+**`proxy`** reads the snapshot a [claude-proxy-rs][proxy] instance already
+keeps, over the same `/admin/oauth/usage` endpoint [claude-plasmoid][plasmoid]
+uses. It spends nothing upstream, works on a machine that has never run Claude
+Code, and inherits the proxy's cache and its web-session fallback for
+Anthropic's aggressively rate-limited usage endpoint.
+
+```sh
+CLAWDMETER_PROXY_URL=https://aiproxy.example.com \
+CLAWDMETER_PROXY_USERNAME=admin \
+CLAWDMETER_PROXY_PASSWORD=... \
+  cargo run --release -p clawdmeter-host --no-default-features --features proxy
+```
+
+Cargo features are additive, so `--features proxy` alone leaves `direct`
+enabled too. Rather than fail that build, `proxy` simply wins.
+
 [alignment-pr]: https://github.com/slint-ui/slint/pull/12656
 [board-docs]: https://docs.waveshare.com/ESP32-S3-Touch-AMOLED-2.16
+[plasmoid]: https://github.com/okhsunrog/claude-plasmoid
+[proxy]: https://github.com/okhsunrog/claude-proxy-rs
 [vendor-repo]: https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-2.16
