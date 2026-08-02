@@ -70,7 +70,20 @@ transfer regardless of payload.
 
 ## Source layout
 
+The repository is a Cargo workspace of host-side crates, with the firmware
+deliberately **excluded** from it: the firmware builds for
+`xtensa-esp32s3-none-elf` on the `esp` toolchain channel, so it keeps its own
+`rust-toolchain.toml`, its own `.cargo/config.toml` and its own lockfile.
+
+- `clawdmeter-icd/` — wire types shared by firmware and host (workspace member)
+- `clawdmeter-host/` — host daemon (workspace member)
+- `firmware/` — device firmware (excluded; separate toolchain)
+
+Inside `firmware/`:
+
 - `src/bin/main.rs` — hardware setup, task wiring, and the UI event loop
+- `src/animation.rs` — palette-indexed sprite format and frame player
+- `src/animations.rs` — generated sprite data (`tools/gen_animations.py`)
 - `src/board.rs` — panel dimensions and the board pin table
 - `src/co5300.rs` — CO5300 QSPI transport, aligned region uploads, brightness
 - `src/events.rs` — task-to-UI events and the wait that drives the loop
@@ -92,8 +105,15 @@ only place that decides which task talks to what.
 ```sh
 git clone https://github.com/okhsunrog/waveshare-esp32s3-amoled-2-16.git
 cd waveshare-esp32s3-amoled-2-16
-cargo build --release
+cargo build --release --workspace   # host crates, stable toolchain
+
+cd firmware && cargo build --release   # device firmware, esp toolchain
 ```
+
+The firmware must be built from inside `firmware/`. Both `rust-toolchain.toml`
+and `.cargo/config.toml` are resolved from the current directory, so
+`--manifest-path` from the repository root would pick the host toolchain and
+the host target.
 
 Cargo fetches everything, including Slint. The dirty-region alignment API the
 CO5300 needs is not in a Slint release yet, so `slint` and `slint-build` come

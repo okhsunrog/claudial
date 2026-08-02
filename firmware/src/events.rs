@@ -168,7 +168,7 @@ pub async fn next_ui_event(
             // loop sleeps until a peripheral or the uptime tick wakes it.
             match animation {
                 Some(remaining) => {
-                    Timer::after(Duration::from_micros(remaining.as_micros() as u64)).await
+                    Timer::after(Duration::from_micros(remaining.as_micros() as u64)).await;
                 }
                 None => core::future::pending::<()>().await,
             }

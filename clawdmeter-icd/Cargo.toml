@@ -1,0 +1,13 @@
+[package]
+name = "clawdmeter-icd"
+version = "0.1.0"
+edition = "2024"
+description = "Wire types shared by the Clawdmeter firmware and its host daemon"
+
+[dependencies]
+ergot = { workspace = true }
+postcard-schema = { workspace = true }
+serde = { workspace = true }
+
+[lints]
+workspace = true

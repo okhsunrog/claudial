@@ -278,7 +278,7 @@ impl<'d> Co5300<'d> {
         let result = self.spi.half_duplex_write(
             DataMode::Single,
             Command::_8Bit(QSPI_WRITE_COMMAND, DataMode::Single),
-            Address::_24Bit((command as u32) << 8, DataMode::Single),
+            Address::_24Bit(u32::from(command) << 8, DataMode::Single),
             0,
             parameters,
         );

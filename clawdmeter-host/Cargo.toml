@@ -1,0 +1,16 @@
+[package]
+name = "clawdmeter-host"
+version = "0.1.0"
+edition = "2024"
+description = "Reads Claude Code usage and pushes it to a Clawdmeter over BLE"
+
+[dependencies]
+clawdmeter-icd = { workspace = true }
+ergot = { workspace = true, features = ["tokio-std"] }
+serde = { workspace = true, features = ["std"] }
+
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
+
+[lints]
+workspace = true

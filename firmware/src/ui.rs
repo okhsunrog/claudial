@@ -1,6 +1,10 @@
 //! The Slint UI: generated types, the helpers that push state into them, and
 //! the callback wiring back to the peripheral tasks.
 
+// `slint::include_modules!` expands generated code that re-qualifies types,
+// tripping unused_qualifications on spans no item-level allow can reach.
+#![allow(unused_qualifications)]
+
 extern crate alloc;
 
 use alloc::rc::Rc;

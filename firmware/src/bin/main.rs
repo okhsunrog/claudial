@@ -200,8 +200,8 @@ async fn main(spawner: Spawner) -> ! {
 
     let slint_window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
     slint_window.set_size(slint::PhysicalSize::new(
-        DISPLAY_WIDTH as u32,
-        DISPLAY_HEIGHT as u32,
+        u32::from(DISPLAY_WIDTH),
+        u32::from(DISPLAY_HEIGHT),
     ));
     slint::platform::set_platform(Box::new(EspPlatform::new(slint_window.clone()))).unwrap();
 
@@ -259,7 +259,10 @@ async fn main(spawner: Spawner) -> ! {
                 frame.upload_us = (upload_end - upload_start).as_micros() as u32;
                 (frame.pixels, frame.rects) =
                     region.iter().fold((0, 0), |(pixels, rects), (_, size)| {
-                        (pixels + size.width as u64 * size.height as u64, rects + 1)
+                        (
+                            pixels + u64::from(size.width) * u64::from(size.height),
+                            rects + 1,
+                        )
                     });
                 match transfers {
                     Ok(transfers) => frame.transfers = transfers,
@@ -365,7 +368,7 @@ async fn main(spawner: Spawner) -> ! {
                         if last_touch_position.is_none() {
                             info!("Touch down at ({}, {})", x, y);
                         }
-                        ui.set_touch_status(format!("touch {},{}", x, y).into());
+                        ui.set_touch_status(format!("touch {x},{y}").into());
                     } else if last_touch_position.is_some() {
                         info!("Touch released");
                     }
@@ -444,7 +447,7 @@ async fn main(spawner: Spawner) -> ! {
                 let elapsed_seconds = started_at.elapsed().as_secs();
                 if elapsed_seconds != displayed_second {
                     displayed_second = elapsed_seconds;
-                    ui.set_uptime(format!("{} s", elapsed_seconds).into());
+                    ui.set_uptime(format!("{elapsed_seconds} s").into());
                 }
             }
             UiEvent::SpriteFrame => {

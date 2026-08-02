@@ -1,97 +1,37 @@
-[package]
-edition      = "2024"
-name         = "waveshare-esp32s3-amoled-2-16"
-rust-version = "1.88"
-version      = "0.1.0"
+[workspace]
+resolver = "2"
+members = ["clawdmeter-icd", "clawdmeter-host"]
+exclude = [
+  "firmware", # Different toolchain (xtensa-esp32s3-none-elf, channel "esp")
+]
 
-[[bin]]
-name = "waveshare-esp32s3-amoled-2-16"
-path = "./src/bin/main.rs"
-test = false
+# Curated strict lints; members opt in via `[lints] workspace = true`.
+# The excluded firmware crate carries a verbatim copy of this table — keep the
+# two in sync when editing.
+[workspace.lints.rust]
+unused_qualifications = "warn"
 
-[[test]]
-harness = false
-name    = "hello_test"
+[workspace.lints.clippy]
+use_self = "warn"
+uninlined_format_args = "warn"
+cast_lossless = "warn"
+manual_let_else = "warn"
+semicolon_if_nothing_returned = "warn"
+redundant_closure_for_method_calls = "warn"
+dbg_macro = "warn"
+undocumented_unsafe_blocks = "warn"
+unused_async = "warn"
 
-[lib]
-test = false
-
-[dependencies]
-esp-hal = { version = "~1.1.0", features = [
-  "defmt",
-  "esp32s3",
-  "unstable",
-] }
-
-esp-rtos = { version = "0.3.0", features = [
-  "defmt",
-  "embassy",
-  "esp-alloc",
-  "esp-radio",
-  "esp32s3",
-] }
-
-defmt                  = "1.0.1"
-esp-bootloader-esp-idf = { version = "0.5.0", features = ["defmt", "esp32s3"] }
-
-bt-hci = "0.8.0"
-axp2101-dd = { version = "0.2.3", features = ["defmt"] }
-cst92xx = { version = "0.1.0", features = ["defmt"] }
-pcf85063a = { version = "0.1.1", features = ["defmt"] }
-embassy-embedded-hal = "0.6.0"
-embassy-executor = { version = "0.10.0", features = ["defmt"] }
-embassy-sync = "0.8.0"
-embassy-time = { version = "0.5.0", features = ["defmt"] }
-embedded-hal-async = "1.0"
-embedded-io = { version = "0.7.1", features = ["defmt"] }
-embedded-io-async = { version = "0.7.0", features = ["defmt"] }
-esp-alloc = { version = "0.10.0", features = ["defmt"] }
-esp-radio = { version = "0.18.0", features = [
-  "ble",
-  "defmt",
-  "esp-alloc",
-  "esp32s3",
-  "unstable",
-] }
-panic-rtt-target = { version = "0.2.0", features = ["defmt"] }
-rtt-target = { version = "0.6.2", features = ["defmt"] }
-trouble-host = { version = "0.6.0", features = ["gatt"] }
-
-critical-section = "1.2.0"
-static_cell      = "2.1.1"
-bytemuck         = "1.25.0"
-embedded-hal     = "1.0"
-time             = { version = "0.3.47", default-features = false }
-# Slint is taken from the branch behind slint-ui/slint#12656, which adds the
-# dirty-region alignment API the CO5300 needs. Switch back to crates.io once it
-# lands in a release. Cargo.lock pins the exact commit.
-slint = { git = "https://github.com/okhsunrog/slint.git", branch = "dirty-region-alignment", default-features = false, features = [
-  "compat-1-2",
-  "libm",
-  "renderer-software",
-  "unsafe-single-threaded",
-] }
-embassy-futures = "0.1.2"
-
-[dev-dependencies]
-embedded-test = { version = "0.7.1", features = [
-  "defmt",
-  "embassy-010",
-  "external-executor",
-  "xtensa-semihosting",
-] }
-
-# For fine tuning these settings, please refer to https://doc.rust-lang.org/cargo/reference/profiles.html
-[profile.dev]
-# The default debug profile is too slow and too big for resource-constrained devices.
-# Always build with some optimizations enabled.
-opt-level = "s"
+[workspace.dependencies]
+clawdmeter-icd = { path = "clawdmeter-icd" }
+# Pinned to a rev for reproducible builds, matching how oxifoc consumes ergot.
+# Bump here and in firmware/Cargo.toml together, then refresh both lockfiles.
+ergot = { git = "https://github.com/okhsunrog/ergot", rev = "8d7db27e030564a048eb16c90080ae6730d14e11" }
+postcard-schema = { version = "0.2.5", features = ["derive"] }
+serde = { version = "1", default-features = false, features = ["derive"] }
 
 [profile.release]
-codegen-units = 1     # LLVM can perform better optimizations using a single thread
-debug         = 2     # prefer slower builds but better debugging experience
-lto           = 'fat'
-opt-level     = 's'
-
-[build-dependencies]
-slint-build = { git = "https://github.com/okhsunrog/slint.git", branch = "dirty-region-alignment" }
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

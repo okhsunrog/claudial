@@ -111,13 +111,10 @@ pub async fn touch_task(
     reason = "Embassy stores the async task state statically rather than on the runtime call stack"
 )]
 pub async fn pmic_task(i2c_bus: &'static SharedI2cBus, channels: &'static PmicChannels) {
-    let mut axp = match pmic::init(I2cDevice::new(i2c_bus)).await {
-        Ok(axp) => axp,
-        Err(_) => {
-            error!("AXP2101 initialization failed");
-            channels.stats.signal(PmicEvent::Error);
-            return;
-        }
+    let Ok(mut axp) = pmic::init(I2cDevice::new(i2c_bus)).await else {
+        error!("AXP2101 initialization failed");
+        channels.stats.signal(PmicEvent::Error);
+        return;
     };
     info!("AXP2101 initialized for telemetry and power-key events");
 
@@ -173,13 +170,10 @@ pub async fn pmic_task(i2c_bus: &'static SharedI2cBus, channels: &'static PmicCh
     reason = "Embassy stores the async task state statically rather than on the runtime call stack"
 )]
 pub async fn rtc_task(i2c_bus: &'static SharedI2cBus, channels: &'static RtcChannels) {
-    let (mut clock, clock_valid) = match rtc::init(I2cDevice::new(i2c_bus)).await {
-        Ok(result) => result,
-        Err(_) => {
-            error!("PCF85063 initialization failed");
-            channels.snapshot.signal(RtcEvent::Error);
-            return;
-        }
+    let Ok((mut clock, clock_valid)) = rtc::init(I2cDevice::new(i2c_bus)).await else {
+        error!("PCF85063 initialization failed");
+        channels.snapshot.signal(RtcEvent::Error);
+        return;
     };
     info!("PCF85063 initialized; clock valid: {}", clock_valid);
 

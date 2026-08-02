@@ -14,8 +14,11 @@ env:
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
-  rust-checks:
-    name: Rust Checks
+  # The firmware is excluded from the workspace because it builds for
+  # xtensa-esp32s3-none-elf on the "esp" channel, so it gets its own job with
+  # its own toolchain and its own lockfile.
+  firmware:
+    name: Firmware
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -29,12 +32,9 @@ jobs:
           - command: fmt
             args: --all -- --check
           - command: clippy
-            args: --all-features --workspace -- -D warnings
+            args: --all-features -- -D warnings
     steps:
-      - name: Checkout firmware
-        uses: actions/checkout@v6
-        with:
-          path: firmware
+      - uses: actions/checkout@v6
       - name: Setup Rust
         uses: esp-rs/xtensa-toolchain@v1.5
         with:
@@ -45,5 +45,30 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: firmware -> target
+      - name: Run command
+        run: cargo ${{ matrix.action.command }} ${{ matrix.action.args }}
+
+  # The ICD and the host daemon build for the host on stable.
+  workspace:
+    name: Workspace
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        action:
+          - command: build
+            args: --workspace --release
+          - command: fmt
+            args: --all -- --check
+          - command: clippy
+            args: --workspace --all-features -- -D warnings
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Enable caching
+        uses: Swatinem/rust-cache@v2
       - name: Run command
         run: cargo ${{ matrix.action.command }} ${{ matrix.action.args }}
