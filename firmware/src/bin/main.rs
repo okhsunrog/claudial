@@ -10,11 +10,14 @@
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::vec;
-use bt_hci::controller::ExternalController;
+use clawdmeter_icd::UsageStatus;
 use defmt::{error, info};
 use embassy_executor::Spawner;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Instant, Ticker, Timer};
+use ergot::NetStack;
+use ergot::interface_manager::profiles::direct_edge::DirectEdge;
+use ergot::interface_manager::utils::framed_stream;
 use esp_hal::clock::CpuClock;
 use esp_hal::delay::Delay;
 use esp_hal::dma::{DmaRxBuf, DmaTxBuf};
@@ -31,27 +34,26 @@ use slint::platform::software_renderer::{
     DirtyRegionAlignment, MinimalSoftwareWindow, RepaintBufferType, Rgb565BigEndianPixel,
 };
 use static_cell::StaticCell;
-use trouble_host::prelude::*;
 use waveshare_esp32s3_amoled_2_16::animation::Player;
 use waveshare_esp32s3_amoled_2_16::animations::ANIMATIONS;
+use waveshare_esp32s3_amoled_2_16::ble::{ble_task, usage_task};
 use waveshare_esp32s3_amoled_2_16::board::{DISPLAY_HEIGHT, DISPLAY_SPI_MHZ, DISPLAY_WIDTH};
 use waveshare_esp32s3_amoled_2_16::co5300::{self, Co5300, brightness_register};
 use waveshare_esp32s3_amoled_2_16::events::{
     BrightnessSignal, PmicChannels, PmicEvent, RtcChannels, RtcEvent, SpriteSignal, TouchChannels,
-    TouchState, UiChannels, UiEvent, next_ui_event,
+    TouchState, UiChannels, UiEvent, UsageSignal, next_ui_event,
 };
 use waveshare_esp32s3_amoled_2_16::frame_stats::{FrameStats, FrameTiming};
 use waveshare_esp32s3_amoled_2_16::pmic::PowerKey;
 use waveshare_esp32s3_amoled_2_16::slint_platform::EspPlatform;
 use waveshare_esp32s3_amoled_2_16::tasks::{SharedI2cBus, pmic_task, rtc_task, touch_task};
+use waveshare_esp32s3_amoled_2_16::transport::{BLE_MTU, BLE_OUTQ, Stack};
 use waveshare_esp32s3_amoled_2_16::ui::{
     self, MainWindow, dispatch_touch_state, push_sprite_frame, update_rtc_display,
 };
 
 extern crate alloc;
 
-const CONNECTIONS_MAX: usize = 1;
-const L2CAP_CHANNELS_MAX: usize = 1;
 const DISPLAY_WIDTH_USIZE: usize = DISPLAY_WIDTH as usize;
 const FRAMEBUFFER_PIXELS: usize = DISPLAY_WIDTH_USIZE * DISPLAY_HEIGHT as usize;
 const DISPLAY_DMA_BUFFER_SIZE: usize = co5300::MAX_TRANSFER_BYTES;
@@ -65,9 +67,18 @@ static PMIC: PmicChannels = PmicChannels::new();
 static RTC: RtcChannels = RtcChannels::new();
 static BRIGHTNESS: BrightnessSignal = BrightnessSignal::new();
 static SPRITE_NEXT: SpriteSignal = SpriteSignal::new();
+static USAGE: UsageSignal = UsageSignal::new();
 
 /// Page index of the sprite screen in the Slint nav bar.
 const SPRITE_PAGE: i32 = 4;
+
+/// Render a reset countdown as `2h 05m`, or `--` when the host has nothing.
+fn format_reset(minutes: u16) -> alloc::string::String {
+    if minutes == 0 {
+        return "--".into();
+    }
+    format!("resets in {}h {:02}m", minutes / 60, minutes % 60)
+}
 
 async fn wake_display(
     display: &mut Co5300<'_>,
@@ -130,15 +141,19 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("Embassy initialized!");
 
-    // find more examples https://github.com/embassy-rs/trouble/tree/main/examples/esp32
-    let transport = BleConnector::new(peripherals.BT, Default::default()).unwrap();
-    let ble_controller = ExternalController::<_, 1>::new(transport);
-    let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX> =
-        HostResources::new();
-    let _stack = trouble_host::new(ble_controller, &mut resources);
+    // Ergot rides a BLE NUS link to the host daemon. This device is an edge
+    // node with one interface, so the stack learns the host's net id from the
+    // first frame rather than being told.
+    let ergot_stack: &'static Stack = {
+        static STACK: StaticCell<Stack> = StaticCell::new();
+        STACK.init(NetStack::new_with_profile(DirectEdge::new_target(
+            framed_stream::Sink::new(BLE_OUTQ.framed_producer(), BLE_MTU),
+        )))
+    };
+    let ble_connector = BleConnector::new(peripherals.BT, Default::default()).unwrap();
+    spawner.spawn(ble_task(ergot_stack, ble_connector).unwrap());
+    spawner.spawn(usage_task(ergot_stack, &USAGE).unwrap());
 
-    // BLE is intentionally kept from the generated template. Its application
-    // task and GATT services will be added after the display/touch bring-up.
     let i2c = I2c::new(
         peripherals.I2C0,
         I2cConfig::default().with_frequency(Rate::from_khz(400)),
@@ -216,6 +231,7 @@ async fn main(spawner: Spawner) -> ! {
         rtc: &RTC,
         brightness: &BRIGHTNESS,
         sprite_next: &SPRITE_NEXT,
+        usage: &USAGE,
     };
 
     let sprite_cells = ui::sprite_model();
@@ -462,6 +478,20 @@ async fn main(spawner: Spawner) -> ! {
                 push_sprite_frame(&sprite_cells, sprite.animation(), sprite.frame());
                 sprite_deadline = Instant::now() + sprite.hold();
                 info!("Sprite animation: {}", sprite.animation().name);
+            }
+            UiEvent::Usage(snapshot) => {
+                ui.set_usage_session(i32::from(snapshot.session_pct));
+                ui.set_usage_weekly(i32::from(snapshot.weekly_pct));
+                ui.set_usage_session_reset(format_reset(snapshot.session_reset_mins).into());
+                ui.set_usage_weekly_reset(format_reset(snapshot.weekly_reset_mins).into());
+                ui.set_usage_status(
+                    match snapshot.status {
+                        UsageStatus::Allowed => "allowed",
+                        UsageStatus::Limited => "limited",
+                        UsageStatus::Unknown => "unknown",
+                    }
+                    .into(),
+                );
             }
             UiEvent::Animation => {}
         }

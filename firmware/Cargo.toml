@@ -52,6 +52,18 @@ defmt                  = "1.0.1"
 esp-bootloader-esp-idf = { version = "0.5.0", features = ["defmt", "esp32s3"] }
 
 bt-hci = "0.8.0"
+
+# Ergot messaging: this device is an edge node with a single BLE interface.
+# Pinned to the same rev as the workspace root — bump both together.
+clawdmeter-icd = { version = "0.1.0", path = "../clawdmeter-icd" }
+ergot = { git = "https://github.com/okhsunrog/ergot", rev = "8d7db27e030564a048eb16c90080ae6730d14e11", default-features = false, features = [
+  "embassy-time",
+  "disable-cache-padding",
+  "defmt-v1",
+] }
+bbqueue = "0.7"
+heapless = { version = "0.9", default-features = false }
+mutex = "1.0.2"
 axp2101-dd = { version = "0.2.3", features = ["defmt"] }
 cst92xx = { version = "0.1.0", features = ["defmt"] }
 pcf85063a = { version = "0.1.1", features = ["defmt"] }
@@ -72,7 +84,9 @@ esp-radio = { version = "0.18.0", features = [
 ] }
 panic-rtt-target = { version = "0.2.0", features = ["defmt"] }
 rtt-target = { version = "0.6.2", features = ["defmt"] }
-trouble-host = { version = "0.6.0", features = ["gatt"] }
+# Pinned to the same rev oxifoc uses: the crates.io release still depends on
+# embassy-sync 0.7, which collides with the 0.8 the rest of the tree uses.
+trouble-host = { git = "https://github.com/embassy-rs/trouble.git", rev = "dc15b9e09fd8e4ba031ec462c3bf2c972bda99f8", features = ["gatt"] }
 
 critical-section = "1.2.0"
 static_cell      = "2.1.1"

@@ -226,7 +226,71 @@ component SpriteGrid inherits Rectangle {
     }
 }
 
+// A labelled percentage bar. The fill is a plain Rectangle rather than an
+// image so a changing percentage dirties only the strip that moved.
+component UsageBar inherits Rectangle {
+    in property <string> label;
+    in property <int> percent;
+    in property <string> reset;
+    in property <color> accent: #5de4c7;
+
+    background: #0d141b;
+    border-color: #1d2a34;
+    border-width: 1px;
+    border-radius: 16px;
+
+    Text {
+        x: 18px;
+        y: 14px;
+        text: root.label;
+        color: #6f8292;
+        font-size: 12px;
+        font-weight: 600;
+    }
+
+    Text {
+        x: 18px;
+        y: 34px;
+        text: root.percent + "%";
+        color: root.accent;
+        font-size: 32px;
+        font-weight: 700;
+    }
+
+    Text {
+        x: root.width - 130px;
+        y: 40px;
+        width: 112px;
+        text: root.reset;
+        color: #526270;
+        font-size: 12px;
+        horizontal-alignment: right;
+    }
+
+    Rectangle {
+        x: 18px;
+        y: 82px;
+        width: root.width - 36px;
+        height: 10px;
+        border-radius: 5px;
+        background: #16222c;
+
+        Rectangle {
+            x: 0px;
+            width: parent.width * Math.clamp(root.percent, 0, 100) / 100;
+            height: parent.height;
+            border-radius: 5px;
+            background: root.accent;
+        }
+    }
+}
+
 export component MainWindow inherits Window {
+    in property <int> usage-session: 0;
+    in property <int> usage-weekly: 0;
+    in property <string> usage-session-reset: "--";
+    in property <string> usage-weekly-reset: "--";
+    in property <string> usage-status: "waiting for host";
     in property <[color]> sprite-cells;
     in property <string> sprite-name: "--";
     in property <string> uptime: "0 s";
@@ -286,7 +350,8 @@ export component MainWindow inherits Window {
             text: root.current-page == 0 ? "SYSTEM OVERVIEW" :
                 root.current-page == 1 ? "DISPLAY" :
                 root.current-page == 2 ? "POWER" :
-                root.current-page == 3 ? "RTC CLOCK" : "SPRITE";
+                root.current-page == 3 ? "RTC CLOCK" :
+                root.current-page == 4 ? "SPRITE" : "CLAUDE USAGE";
             color: #f3f7fa;
             font-size: 22px;
             font-weight: 700;
@@ -830,6 +895,46 @@ export component MainWindow inherits Window {
         }
     }
 
+    if root.current-page == 5 : Rectangle {
+        x: 28px;
+        y: 92px;
+        width: 424px;
+        height: 314px;
+        background: #000000;
+
+        UsageBar {
+            x: 0px;
+            y: 0px;
+            width: 424px;
+            height: 106px;
+            label: "SESSION (5H WINDOW)";
+            percent: root.usage-session;
+            reset: root.usage-session-reset;
+            accent: #5de4c7;
+        }
+
+        UsageBar {
+            x: 0px;
+            y: 118px;
+            width: 424px;
+            height: 106px;
+            label: "WEEKLY";
+            percent: root.usage-weekly;
+            reset: root.usage-weekly-reset;
+            accent: #c792ea;
+        }
+
+        Text {
+            x: 0px;
+            y: 248px;
+            width: 424px;
+            text: root.usage-status;
+            color: #6f8292;
+            font-size: 13px;
+            horizontal-alignment: center;
+        }
+    }
+
     Rectangle {
         x: 36px;
         y: 414px;
@@ -846,7 +951,7 @@ export component MainWindow inherits Window {
 
             NavButton {
                 horizontal-stretch: 1;
-                label: "OVERVIEW";
+                label: "SYSTEM";
                 active: root.current-page == 0;
                 clicked => {
                     root.current-page = 0;
@@ -886,6 +991,15 @@ export component MainWindow inherits Window {
                 active: root.current-page == 4;
                 clicked => {
                     root.current-page = 4;
+                }
+            }
+
+            NavButton {
+                horizontal-stretch: 1;
+                label: "USAGE";
+                active: root.current-page == 5;
+                clicked => {
+                    root.current-page = 5;
                 }
             }
         }

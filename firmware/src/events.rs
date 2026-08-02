@@ -1,11 +1,13 @@
 //! Events flowing from the peripheral tasks to the UI loop, and the endpoints
 //! they travel over.
 
-use embassy_futures::select::{Either, Either3, Either4, select, select3, select4};
+use embassy_futures::select::{Either, Either4, select, select4};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Ticker, Timer};
+
+use clawdmeter_icd::UsageSnapshot;
 
 use crate::pmic::{PmicStats, PowerKey};
 use crate::rtc::{DateTime as RtcDateTime, Snapshot as RtcSnapshot};
@@ -13,6 +15,8 @@ use crate::rtc::{DateTime as RtcDateTime, Snapshot as RtcSnapshot};
 pub type BrightnessSignal = Signal<CriticalSectionRawMutex, u8>;
 /// Raised by the UI when the sprite page is tapped.
 pub type SpriteSignal = Signal<CriticalSectionRawMutex, ()>;
+/// Latest usage snapshot pushed by the host daemon.
+pub type UsageSignal = Signal<CriticalSectionRawMutex, UsageSnapshot>;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum TouchState {
@@ -108,6 +112,8 @@ pub enum UiEvent {
     SpriteFrame,
     /// The user asked for the next sprite animation.
     SpriteNext,
+    /// The host pushed a fresh usage snapshot.
+    Usage(UsageSnapshot),
 }
 
 /// Every endpoint the UI loop waits on, bundled so the wait keeps a readable
@@ -118,6 +124,7 @@ pub struct UiChannels {
     pub rtc: &'static RtcChannels,
     pub brightness: &'static BrightnessSignal,
     pub sprite_next: &'static SpriteSignal,
+    pub usage: &'static UsageSignal,
 }
 
 /// Wait until one of the things the UI cares about happens.
@@ -149,6 +156,7 @@ pub async fn next_ui_event(
         rtc,
         brightness,
         sprite_next,
+        usage,
     } = channels;
     let peripherals = select4(
         async { UiEvent::PowerKey(pmic.power_key.wait().await) },
@@ -194,13 +202,15 @@ pub async fn next_ui_event(
         }
     };
 
-    match select3(peripherals, rest, sprite).await {
-        Either3::First(event) | Either3::Second(event) => match event {
+    let usage = async { UiEvent::Usage(usage.wait().await) };
+
+    match select4(peripherals, rest, sprite, usage).await {
+        Either4::First(event) | Either4::Second(event) => match event {
             Either4::First(event)
             | Either4::Second(event)
             | Either4::Third(event)
             | Either4::Fourth(event) => event,
         },
-        Either3::Third(event) => event,
+        Either4::Third(event) | Either4::Fourth(event) => event,
     }
 }
