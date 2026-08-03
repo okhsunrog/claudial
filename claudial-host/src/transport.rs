@@ -195,8 +195,9 @@ pub async fn connect(
     }));
 
     let tx_queue = queue.clone();
+    let tx_stack = stack.clone();
     workers.push(tokio::spawn(async move {
-        tx_worker(tx_queue, rx_char).await;
+        tx_worker(tx_stack, tx_queue, rx_char).await;
     }));
 
     info!("NUS link up (net {NET_ID})");
@@ -227,14 +228,25 @@ async fn rx_worker(
         }
     }
 
-    stack.manage_profile(|im| {
-        let _ = im.set_interface_state((), InterfaceState::Down);
-    });
+    mark_down(&stack);
     warn!("rx worker exited");
 }
 
+/// Take the interface down so the caller's `link_is_up` check fails and the
+/// session is retried.
+///
+/// Both pumps do this, because either can be the one to notice. A dropped link
+/// does not always end the notification stream — BlueZ can leave it open — and
+/// then only the failing write knows. Without this the daemon publishes into a
+/// dead connection once a minute forever, logging success every time.
+fn mark_down(stack: &Stack) {
+    stack.manage_profile(|im| {
+        let _ = im.set_interface_state((), InterfaceState::Down);
+    });
+}
+
 /// Drain outbound ergot frames onto the device's RX characteristic.
-async fn tx_worker(queue: StdQueue, rx_char: Characteristic) {
+async fn tx_worker(stack: Stack, queue: StdQueue, rx_char: Characteristic) {
     use ergot::exports::bbqueue::traits::bbqhdl::BbqHandle;
     let consumer: ergot::exports::bbqueue::prod_cons::framed::FramedConsumer<StdQueue> =
         queue.framed_consumer();
@@ -250,5 +262,6 @@ async fn tx_worker(queue: StdQueue, rx_char: Characteristic) {
         frame.release();
     }
 
+    mark_down(&stack);
     warn!("tx worker exited");
 }
