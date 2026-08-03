@@ -4,6 +4,10 @@ Claudial is a desk display for Claude subscription usage. It shows the current
 five-hour and seven-day utilization, reset times, spending pace, data freshness,
 and battery state on a [Waveshare ESP32-S3-Touch-AMOLED-2.16][board-docs].
 
+<p align="center">
+  <img src="assets/claudial.jpg" alt="Claudial displaying Claude subscription usage" width="480">
+</p>
+
 The display does not hold Claude credentials or access the network. A small
 Linux user service obtains usage, finds the display over BLE, synchronizes its
 RTC, and sends a fresh snapshot once a minute.
