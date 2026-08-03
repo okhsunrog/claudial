@@ -12,7 +12,7 @@ use claudial_icd::{ClockSync, UsageSnapshot};
 use crate::pmic::{PmicStats, PowerKey};
 use crate::rtc::Snapshot as RtcSnapshot;
 
-pub type BrightnessSignal = Signal<CriticalSectionRawMutex, u8>;
+pub type SettingsChannel = Channel<CriticalSectionRawMutex, SettingsAction, 8>;
 pub type BleSignal = Signal<CriticalSectionRawMutex, BleState>;
 /// Latest usage snapshot pushed by the host daemon.
 pub type UsageSignal = Signal<CriticalSectionRawMutex, UsageSnapshot>;
@@ -28,6 +28,19 @@ pub enum BleState {
 pub enum TouchState {
     Released,
     Pressed { x: u16, y: u16 },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SettingsAction {
+    Open,
+    Close,
+    BrightnessStep(i8),
+    ToggleAutoDim,
+    ToggleDimOnUsb,
+    IdleTimeoutStep(i8),
+    DimBrightnessStep(i8),
+    PowerOff,
+    Reboot,
 }
 
 #[derive(Clone, Copy)]
@@ -110,7 +123,7 @@ pub enum UiEvent {
     Touch(TouchState),
     Pmic(PmicEvent),
     Rtc(RtcEvent),
-    Brightness(u8),
+    Settings(SettingsAction),
     Ble(BleState),
     Maintenance,
     Animation,
@@ -126,7 +139,7 @@ pub struct UiChannels {
     pub touch: &'static TouchChannels,
     pub pmic: &'static PmicChannels,
     pub rtc: &'static RtcChannels,
-    pub brightness: &'static BrightnessSignal,
+    pub settings: &'static SettingsChannel,
     pub ble: &'static BleSignal,
     pub usage: &'static UsageSignal,
 }
@@ -158,7 +171,7 @@ pub async fn next_ui_event(
         touch,
         pmic,
         rtc,
-        brightness,
+        settings,
         ble,
         usage,
     } = channels;
@@ -170,7 +183,7 @@ pub async fn next_ui_event(
     );
     let rest = select4(
         async { UiEvent::Rtc(rtc.snapshot.wait().await) },
-        async { UiEvent::Brightness(brightness.wait().await) },
+        async { UiEvent::Settings(settings.receive().await) },
         async {
             maintenance.next().await;
             UiEvent::Maintenance

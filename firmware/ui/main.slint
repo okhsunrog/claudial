@@ -1,8 +1,9 @@
 // The Claudial face.
 //
-// One screen, one overlay, no navigation. The two rolling limits share one
-// visual language: session outside, weekly inside. Board telemetry stays out
-// of the way until either corner status indicator is tapped.
+// The dial is a glanceable instrument face. Configuration and detailed board
+// telemetry live on a separate, scrollable settings page reached from the
+// lower-right corner; the two status capsules remain indicators, not hidden
+// navigation targets.
 //
 // Dots are intentional. A filled arc dirties most of the 480 x 480 panel;
 // changing a percentage here repaints only the dots whose state changed.
@@ -153,6 +154,68 @@ component InfoRow inherits Rectangle {
     }
 }
 
+component ToggleSwitch inherits Rectangle {
+    in property <bool> checked: false;
+    in property <bool> enabled: true;
+    callback toggled();
+
+    width: 68px;
+    height: 36px;
+    border-radius: 18px;
+    background: !root.enabled ? Palette.track : root.checked ? Palette.ok : Palette.track;
+    opacity: root.enabled ? 1 : 0.45;
+
+    TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.toggled();
+        }
+    }
+
+    Rectangle {
+        x: root.checked ? 36px : 4px;
+        y: 4px;
+        width: 28px;
+        height: 28px;
+        border-radius: 14px;
+        background: root.enabled ? Palette.ink : Palette.dim;
+        animate x { duration: 140ms; }
+    }
+}
+
+component SettingsLabel inherits Rectangle {
+    in property <string> label;
+    in property <string> detail;
+
+    Text {
+        x: 0px;
+        y: 10px;
+        width: 210px;
+        height: 24px;
+        text: root.label;
+        color: Palette.ink;
+        font-size: 15px;
+        font-weight: 600;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: 0px;
+        y: 35px;
+        width: 218px;
+        height: 20px;
+        text: root.detail;
+        color: Palette.dim;
+        font-size: 12px;
+        vertical-alignment: center;
+    }
+}
+
+component Divider inherits Rectangle {
+    height: 1px;
+    background: Palette.panel-line;
+}
+
 export component MainWindow inherits Window {
     // Usage — the reason the thing exists.
     in property <bool> usage-known: false;
@@ -187,10 +250,21 @@ export component MainWindow inherits Window {
     in property <string> rtc-status: "starting";
 
     in-out property <int> brightness-percent: 80;
-    in-out property <bool> show-diagnostics: false;
+    in property <bool> auto-dim-enabled: true;
+    in property <bool> dim-on-usb: false;
+    in property <int> idle-timeout-seconds: 120;
+    in property <int> dim-brightness-percent: 12;
+    in property <string> settings-storage-status: "defaults";
+    in-out property <bool> show-settings: false;
     in-out property <bool> show-power-menu: false;
 
+    callback open-settings();
+    callback close-settings();
     callback brightness-step(int);
+    callback auto-dim-toggle();
+    callback dim-on-usb-toggle();
+    callback idle-timeout-step(int);
+    callback dim-brightness-step(int);
     callback power-off();
     callback reboot();
 
@@ -198,6 +272,11 @@ export component MainWindow inherits Window {
     property <color> data-accent: !root.ble-connected ? Palette.danger : root.data-fresh ? Palette.ok : Palette.weekly;
     property <color> session-accent: root.usage-limited || root.usage-session >= 100 ? Palette.danger : Palette.session;
     property <color> weekly-accent: root.usage-limited || root.usage-weekly >= 100 ? Palette.danger : Palette.weekly;
+    property <string> idle-timeout-label: root.idle-timeout-seconds == 30 ? "30 sec"
+        : root.idle-timeout-seconds == 60 ? "1 min"
+        : root.idle-timeout-seconds == 120 ? "2 min"
+        : root.idle-timeout-seconds == 300 ? "5 min"
+        : root.idle-timeout-seconds == 600 ? "10 min" : "30 min";
 
     width: 480px;
     height: 480px;
@@ -222,89 +301,66 @@ export component MainWindow inherits Window {
         accent: root.weekly-accent;
     }
 
-    // The visible indicators are compact, but the targets are large enough
-    // for a finger. Both lead to the same diagnostics overlay.
-    battery-touch := TouchArea {
-        x: 12px;
-        y: 0px;
-        width: 128px;
-        height: 56px;
-        clicked => {
-            root.show-diagnostics = true;
+    Rectangle {
+        x: 20px;
+        y: 8px;
+        width: root.usb-connected ? 104px : 78px;
+        height: 40px;
+        border-radius: 20px;
+        background: #171110d0;
+        border-width: 1px;
+        border-color: Palette.panel-line;
+
+        BatteryIcon {
+            // In the powered state, move the battery under the bolt so
+            // its white stroke overlaps the rounded right edge.
+            x: root.usb-connected ? 15px : 6px;
+            y: 5px;
+            percent: root.battery-percent;
+            powered: root.usb-connected;
+            known: root.battery-known;
         }
 
-        Rectangle {
-            x: 8px;
-            y: 8px;
-            width: root.usb-connected ? 104px : 78px;
-            height: 40px;
-            border-radius: 20px;
-            background: battery-touch.pressed ? Palette.track : #171110d0;
-            border-width: 1px;
-            border-color: Palette.panel-line;
-            opacity: battery-touch.pressed ? 0.75 : 1;
-
-            BatteryIcon {
-                // In the powered state, move the battery under the bolt so
-                // its white stroke overlaps the rounded right edge.
-                x: root.usb-connected ? 15px : 6px;
-                y: 5px;
-                percent: root.battery-percent;
-                powered: root.usb-connected;
-                known: root.battery-known;
-            }
-
-            if root.usb-connected: Image {
-                x: 70px;
-                y: 5px;
-                width: 20px;
-                height: 30px;
-                source: @image-url("icons/lightning.svg");
-                colorize: Palette.ink;
-            }
+        if root.usb-connected: Image {
+            x: 70px;
+            y: 5px;
+            width: 20px;
+            height: 30px;
+            source: @image-url("icons/lightning.svg");
+            colorize: Palette.ink;
         }
     }
 
-    data-touch := TouchArea {
-        x: 342px;
-        y: 0px;
-        width: 128px;
-        height: 56px;
-        clicked => {
-            root.show-diagnostics = true;
-        }
+    Rectangle {
+        x: 356px;
+        y: 8px;
+        width: 104px;
+        height: 40px;
+        border-radius: 20px;
+        background: #171110d0;
+        border-width: 1px;
+        border-color: Palette.panel-line;
 
         Rectangle {
-            x: 14px;
-            y: 8px;
-            width: 104px;
-            height: 40px;
-            border-radius: 20px;
-            background: data-touch.pressed ? Palette.track : #171110d0;
-            border-width: 1px;
-            border-color: Palette.panel-line;
+            x: 16px;
+            y: 16px;
+            width: 8px;
+            height: 8px;
+            border-radius: 4px;
+            background: root.data-accent;
+        }
 
-            Rectangle {
-                x: 16px;
-                y: 16px;
-                width: 8px;
-                height: 8px;
-                border-radius: 4px;
-                background: root.data-accent;
-            }
-
-            Text {
-                x: 32px;
-                width: 64px;
-                height: 100%;
-                text: root.data-label;
-                color: root.data-accent;
-                font-size: 14px;
-                font-weight: 700;
-                letter-spacing: 0.6px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
+        Text {
+            x: 32px;
+            width: 64px;
+            height: 100%;
+            text: root.data-label;
+            color: root.data-accent;
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 0.6px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
         }
     }
 
@@ -382,140 +438,255 @@ export component MainWindow inherits Window {
         vertical-alignment: center;
     }
 
-    // --- Diagnostics ------------------------------------------------------
+    settings-touch := TouchArea {
+        x: 402px;
+        y: 402px;
+        width: 66px;
+        height: 66px;
+        clicked => {
+            root.open-settings();
+        }
 
-    if root.show-diagnostics: Rectangle {
+        Rectangle {
+            x: 8px;
+            y: 8px;
+            width: 50px;
+            height: 50px;
+            border-radius: 25px;
+            background: settings-touch.pressed ? Palette.track : #171110e8;
+            border-width: 1px;
+            border-color: Palette.panel-line;
+
+            Rectangle { x: 13px; y: 14px; width: 24px; height: 2px; background: Palette.mid; }
+            Rectangle { x: 13px; y: 24px; width: 24px; height: 2px; background: Palette.mid; }
+            Rectangle { x: 13px; y: 34px; width: 24px; height: 2px; background: Palette.mid; }
+            Rectangle { x: 19px; y: 10px; width: 6px; height: 10px; border-radius: 3px; background: Palette.ink; }
+            Rectangle { x: 29px; y: 20px; width: 6px; height: 10px; border-radius: 3px; background: Palette.ink; }
+            Rectangle { x: 16px; y: 30px; width: 6px; height: 10px; border-radius: 3px; background: Palette.ink; }
+        }
+    }
+
+    // --- Settings ---------------------------------------------------------
+
+    if root.show-settings: Rectangle {
         width: 100%;
         height: 100%;
-        background: #000000f2;
+        background: Palette.bg;
 
-        TouchArea {
-            clicked => {
-                root.show-diagnostics = false;
+        // Prevent empty areas of this page from reaching the dial beneath it.
+        TouchArea { }
+
+        Rectangle {
+            x: 0px;
+            y: 68px;
+            width: 480px;
+            height: 412px;
+            clip: true;
+
+            settings-scroll := Flickable {
+                width: 100%;
+                height: 100%;
+                content-width: self.width;
+                content-height: settings-content.height;
+
+                settings-content := Rectangle {
+                x: 24px;
+                y: 0px;
+                width: 432px;
+                height: 920px;
+
+                Text {
+                    x: 4px;
+                    y: 10px;
+                    width: 424px;
+                    height: 20px;
+                    text: "DISPLAY";
+                    color: Palette.dim;
+                    font-size: 12px;
+                    font-weight: 700;
+                    letter-spacing: 1.6px;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                    x: 0px;
+                    y: 38px;
+                    width: 432px;
+                    height: 338px;
+                    border-radius: 22px;
+                    background: Palette.panel;
+                    border-width: 1px;
+                    border-color: Palette.panel-line;
+
+                    SettingsLabel {
+                        x: 16px; y: 0px; width: 218px; height: 68px;
+                        label: "Brightness";
+                        detail: "Normal viewing level";
+                    }
+                    StepButton { x: 248px; y: 8px; label: "-"; clicked => { root.brightness-step(-1); } }
+                    Text {
+                        x: 300px; y: 8px; width: 64px; height: 52px;
+                        text: root.brightness-percent + "%";
+                        color: Palette.ink; font-size: 14px; font-weight: 700;
+                        horizontal-alignment: center; vertical-alignment: center;
+                    }
+                    StepButton { x: 364px; y: 8px; label: "+"; clicked => { root.brightness-step(1); } }
+                    Divider { x: 16px; y: 68px; width: 400px; }
+
+                    SettingsLabel {
+                        x: 16px; y: 69px; width: 250px; height: 65px;
+                        label: "Auto dim";
+                        detail: root.auto-dim-enabled ? "Enabled" : "Display stays at normal brightness";
+                    }
+                    ToggleSwitch {
+                        x: 348px; y: 83px;
+                        checked: root.auto-dim-enabled;
+                        toggled => { root.auto-dim-toggle(); }
+                    }
+                    Divider { x: 16px; y: 134px; width: 400px; }
+
+                    SettingsLabel {
+                        x: 16px; y: 135px; width: 270px; height: 65px;
+                        label: "Dim while on USB";
+                        detail: root.auto-dim-enabled ? "Off keeps the desk display glanceable" : "Requires auto dim";
+                    }
+                    ToggleSwitch {
+                        x: 348px; y: 149px;
+                        checked: root.dim-on-usb;
+                        enabled: root.auto-dim-enabled;
+                        toggled => { root.dim-on-usb-toggle(); }
+                    }
+                    Divider { x: 16px; y: 200px; width: 400px; }
+
+                    SettingsLabel {
+                        x: 16px; y: 201px; width: 218px; height: 68px;
+                        label: "Idle delay";
+                        detail: "Time after the last touch";
+                    }
+                    StepButton { x: 248px; y: 209px; label: "-"; clicked => { root.idle-timeout-step(-1); } }
+                    Text {
+                        x: 300px; y: 209px; width: 64px; height: 52px;
+                        text: root.idle-timeout-label;
+                        color: Palette.ink; font-size: 13px; font-weight: 700;
+                        horizontal-alignment: center; vertical-alignment: center;
+                    }
+                    StepButton { x: 364px; y: 209px; label: "+"; clicked => { root.idle-timeout-step(1); } }
+                    Divider { x: 16px; y: 269px; width: 400px; }
+
+                    SettingsLabel {
+                        x: 16px; y: 270px; width: 218px; height: 68px;
+                        label: "Dim brightness";
+                        detail: "Low-power viewing level";
+                    }
+                    StepButton { x: 248px; y: 278px; label: "-"; clicked => { root.dim-brightness-step(-1); } }
+                    Text {
+                        x: 300px; y: 278px; width: 64px; height: 52px;
+                        text: root.dim-brightness-percent + "%";
+                        color: Palette.ink; font-size: 14px; font-weight: 700;
+                        horizontal-alignment: center; vertical-alignment: center;
+                    }
+                    StepButton { x: 364px; y: 278px; label: "+"; clicked => { root.dim-brightness-step(1); } }
+                }
+
+                Text {
+                    x: 4px; y: 402px; width: 424px; height: 20px;
+                    text: "STATUS"; color: Palette.dim; font-size: 12px; font-weight: 700;
+                    letter-spacing: 1.6px; vertical-alignment: center;
+                }
+
+                Rectangle {
+                    x: 0px; y: 430px; width: 432px; height: 304px;
+                    border-radius: 22px; background: Palette.panel;
+                    border-width: 1px; border-color: Palette.panel-line;
+
+                    VerticalLayout {
+                        x: 18px; y: 14px; width: 396px; spacing: 0px;
+                        InfoRow { label: "Data"; value: root.data-label; accent: root.data-accent; }
+                        InfoRow { label: "Account"; value: root.usage-status; accent: root.usage-limited ? Palette.danger : Palette.ink; }
+                        InfoRow { label: "BLE"; value: root.ble-status; }
+                        InfoRow { label: "Clock"; value: root.clock + " · " + root.rtc-status; }
+                        InfoRow { label: "Touch"; value: root.touch-status; }
+                        InfoRow { label: "PMIC"; value: root.pmic-status; }
+                        InfoRow { label: "Battery"; value: root.battery-voltage; }
+                        InfoRow { label: "VBUS / VSYS"; value: root.vbus-voltage + " · " + root.vsys-voltage; }
+                        InfoRow { label: "Die temp"; value: root.pmic-temperature; }
+                        InfoRow { label: "Source"; value: root.power-source; }
+                        InfoRow { label: "Uptime"; value: root.uptime; }
+                    }
+                }
+
+                Text {
+                    x: 4px; y: 760px; width: 424px; height: 20px;
+                    text: "SYSTEM"; color: Palette.dim; font-size: 12px; font-weight: 700;
+                    letter-spacing: 1.6px; vertical-alignment: center;
+                }
+
+                system-power-touch := TouchArea {
+                    x: 0px; y: 788px; width: 432px; height: 72px;
+                    clicked => { root.show-power-menu = true; }
+
+                    Rectangle {
+                        border-radius: 22px;
+                        background: system-power-touch.pressed ? Palette.track : Palette.panel;
+                        border-width: 1px; border-color: Palette.panel-line;
+                        SettingsLabel {
+                            x: 18px; y: 2px; width: 260px; height: 68px;
+                            label: "Power"; detail: "Restart or shut down the device";
+                        }
+                        Text {
+                            x: 340px; y: 0px; width: 72px; height: 72px;
+                            text: "OPEN"; color: Palette.weekly; font-size: 12px; font-weight: 700;
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+                    }
+                }
+
+                Text {
+                    x: 4px; y: 876px; width: 424px; height: 20px;
+                    text: "Settings are " + root.settings-storage-status;
+                    color: root.settings-storage-status == "save failed" ? Palette.danger : Palette.dim;
+                    font-size: 12px; horizontal-alignment: center; vertical-alignment: center;
+                }
+                }
             }
         }
 
         Rectangle {
-            x: 38px;
-            y: 34px;
-            width: 404px;
-            height: 412px;
-            border-radius: 26px;
-            background: Palette.panel;
-            border-width: 1px;
-            border-color: Palette.panel-line;
+            x: 0px; y: 0px; width: 480px; height: 68px;
+            background: #080606;
 
-            // Keeps taps inside the card from reaching the dismiss backdrop.
-            TouchArea { }
-
-            Text {
-                x: 28px;
-                y: 16px;
-                width: 348px;
-                height: 22px;
-                text: "SYSTEM";
-                color: Palette.dim;
-                font-size: 12px;
-                letter-spacing: 1.6px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+            Rectangle {
+                x: 0px; y: 67px; width: 480px; height: 1px;
+                background: Palette.panel-line;
             }
 
-            VerticalLayout {
-                x: 28px;
-                y: 44px;
-                width: 348px;
-                spacing: 0px;
-
-                InfoRow {
-                    label: "Data";
-                    value: root.data-label;
-                    accent: root.data-accent;
-                }
-
-                InfoRow {
-                    label: "Account";
-                    value: root.usage-status;
-                    accent: root.usage-limited ? Palette.danger : Palette.ink;
-                }
-
-                InfoRow { label: "BLE"; value: root.ble-status; }
-                InfoRow { label: "Clock"; value: root.clock + " · " + root.rtc-status; }
-                InfoRow { label: "Touch"; value: root.touch-status; }
-                InfoRow { label: "PMIC"; value: root.pmic-status; }
-                InfoRow { label: "Battery"; value: root.battery-voltage; }
-                InfoRow { label: "VBUS / VSYS"; value: root.vbus-voltage + " · " + root.vsys-voltage; }
-                InfoRow { label: "Die temp"; value: root.pmic-temperature; }
-                InfoRow { label: "Source"; value: root.power-source; }
-                InfoRow { label: "Uptime"; value: root.uptime; }
-            }
-
-            Text {
-                x: 28px;
-                y: 332px;
-                width: 90px;
-                height: 52px;
-                text: "Brightness";
-                color: Palette.dim;
-                font-size: 13px;
-                vertical-alignment: center;
-            }
-
-            StepButton {
-                x: 122px;
-                y: 332px;
-                label: "-";
-                clicked => {
-                    root.brightness-step(-5);
-                }
-            }
-
-            Text {
-                x: 178px;
-                y: 332px;
-                width: 44px;
-                height: 52px;
-                text: root.brightness-percent + "%";
-                color: Palette.ink;
-                font-size: 14px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-
-            StepButton {
-                x: 226px;
-                y: 332px;
-                label: "+";
-                clicked => {
-                    root.brightness-step(5);
-                }
-            }
-
-            power-touch := TouchArea {
-                x: 324px;
-                y: 332px;
-                width: 52px;
-                height: 52px;
-                clicked => {
-                    root.show-diagnostics = false;
-                    root.show-power-menu = true;
-                }
-
+            back-touch := TouchArea {
+                x: 12px; y: 8px; width: 88px; height: 52px;
+                clicked => { root.close-settings(); }
                 Rectangle {
-                    border-radius: 14px;
-                    background: power-touch.pressed ? Palette.danger : Palette.track;
-
+                    x: 0px; y: 6px; width: 76px; height: 40px;
+                    border-radius: 20px;
+                    background: back-touch.pressed ? Palette.track : Palette.panel;
+                    border-width: 1px; border-color: Palette.panel-line;
                     Text {
-                        text: "!";
-                        color: Palette.ink;
-                        font-size: 20px;
-                        font-weight: 700;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                        width: 100%;
-                        height: 100%;
+                        text: "BACK"; color: Palette.ink; font-size: 12px; font-weight: 700;
+                        letter-spacing: 0.8px; horizontal-alignment: center; vertical-alignment: center;
+                        width: 100%; height: 100%;
                     }
                 }
+            }
+
+            Text {
+                x: 120px; y: 0px; width: 240px; height: 68px;
+                text: "SETTINGS"; color: Palette.ink; font-size: 17px; font-weight: 700;
+                letter-spacing: 1.2px; horizontal-alignment: center; vertical-alignment: center;
+            }
+
+            Text {
+                x: 364px; y: 0px; width: 100px; height: 68px;
+                text: root.settings-storage-status;
+                color: root.settings-storage-status == "save failed" ? Palette.danger : Palette.dim;
+                font-size: 11px; horizontal-alignment: right; vertical-alignment: center;
             }
         }
     }

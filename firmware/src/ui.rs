@@ -8,12 +8,12 @@
 extern crate alloc;
 
 use alloc::format;
+use claudial_icd::settings::DisplaySettings;
 use slint::PhysicalPosition;
 use slint::platform::software_renderer::MinimalSoftwareWindow;
 use slint::platform::{PointerEventButton, WindowEvent};
 
-use crate::co5300::MINIMUM_BRIGHTNESS_PERCENT;
-use crate::events::{BrightnessSignal, PmicChannels, TouchState};
+use crate::events::{SettingsAction, SettingsChannel, TouchState};
 use crate::rtc::Snapshot as RtcSnapshot;
 
 slint::include_modules!();
@@ -31,6 +31,14 @@ pub fn update_clock(ui: &MainWindow, snapshot: RtcSnapshot) {
         ui.set_clock("--:--".into());
         ui.set_rtc_status("needs host sync".into());
     }
+}
+
+pub fn update_settings(ui: &MainWindow, settings: DisplaySettings) {
+    ui.set_brightness_percent(i32::from(settings.brightness_percent));
+    ui.set_auto_dim_enabled(settings.auto_dim);
+    ui.set_dim_on_usb(settings.dim_on_usb);
+    ui.set_idle_timeout_seconds(i32::from(settings.idle_timeout_seconds));
+    ui.set_dim_brightness_percent(i32::from(settings.dim_brightness_percent));
 }
 
 pub fn dispatch_touch_state(
@@ -65,20 +73,32 @@ pub fn dispatch_touch_state(
 }
 
 /// Wire the UI's callbacks to the endpoints the peripheral tasks listen on.
-pub fn connect_callbacks(
-    ui: &MainWindow,
-    brightness: &'static BrightnessSignal,
-    pmic: &'static PmicChannels,
-) {
-    let ui_weak = ui.as_weak();
-    ui.on_brightness_step(move |delta| {
-        if let Some(ui) = ui_weak.upgrade() {
-            let percent = (ui.get_brightness_percent() + delta)
-                .clamp(i32::from(MINIMUM_BRIGHTNESS_PERCENT), 100);
-            ui.set_brightness_percent(percent);
-            brightness.signal(percent as u8);
-        }
+pub fn connect_callbacks(ui: &MainWindow, settings: &'static SettingsChannel) {
+    ui.on_open_settings(move || {
+        let _ = settings.try_send(SettingsAction::Open);
     });
-    ui.on_power_off(|| pmic.power_off.signal(()));
-    ui.on_reboot(|| esp_hal::system::software_reset());
+    ui.on_close_settings(move || {
+        let _ = settings.try_send(SettingsAction::Close);
+    });
+    ui.on_brightness_step(move |direction| {
+        let _ = settings.try_send(SettingsAction::BrightnessStep(direction as i8));
+    });
+    ui.on_auto_dim_toggle(move || {
+        let _ = settings.try_send(SettingsAction::ToggleAutoDim);
+    });
+    ui.on_dim_on_usb_toggle(move || {
+        let _ = settings.try_send(SettingsAction::ToggleDimOnUsb);
+    });
+    ui.on_idle_timeout_step(move |direction| {
+        let _ = settings.try_send(SettingsAction::IdleTimeoutStep(direction as i8));
+    });
+    ui.on_dim_brightness_step(move |direction| {
+        let _ = settings.try_send(SettingsAction::DimBrightnessStep(direction as i8));
+    });
+    ui.on_power_off(move || {
+        let _ = settings.try_send(SettingsAction::PowerOff);
+    });
+    ui.on_reboot(move || {
+        let _ = settings.try_send(SettingsAction::Reboot);
+    });
 }

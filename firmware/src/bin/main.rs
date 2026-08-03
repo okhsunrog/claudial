@@ -14,17 +14,21 @@ use claudial_firmware::ble::{ble_task, clock_sync_task, usage_task};
 use claudial_firmware::board::{DISPLAY_HEIGHT, DISPLAY_SPI_MHZ, DISPLAY_WIDTH};
 use claudial_firmware::co5300::{self, Co5300, brightness_register};
 use claudial_firmware::events::{
-    BleSignal, BleState, BrightnessSignal, PmicChannels, PmicEvent, RtcChannels, RtcEvent,
-    TouchChannels, TouchState, UiChannels, UiEvent, UsageSignal, next_ui_event,
+    BleSignal, BleState, PmicChannels, PmicEvent, RtcChannels, RtcEvent, SettingsAction,
+    SettingsChannel, TouchChannels, TouchState, UiChannels, UiEvent, UsageSignal, next_ui_event,
 };
 use claudial_firmware::frame_stats::{FrameStats, FrameTiming};
 use claudial_firmware::pmic::PowerKey;
 use claudial_firmware::rtc::Snapshot as RtcSnapshot;
+use claudial_firmware::settings_store::SettingsStore;
 use claudial_firmware::slint_platform::EspPlatform;
 use claudial_firmware::tasks::{SharedI2cBus, pmic_task, rtc_task, touch_task};
 use claudial_firmware::transport::{BLE_MTU, BLE_OUTQ, Stack};
-use claudial_firmware::ui::{self, MainWindow, dispatch_touch_state, update_clock};
+use claudial_firmware::ui::{
+    self, MainWindow, dispatch_touch_state, update_clock, update_settings,
+};
 use claudial_icd::pace::Pace;
+use claudial_icd::settings::DisplaySettings;
 use claudial_icd::{UsageSnapshot, UsageStatus, minutes_until};
 use defmt::{error, info};
 use embassy_executor::Spawner;
@@ -55,7 +59,6 @@ extern crate alloc;
 const DISPLAY_WIDTH_USIZE: usize = DISPLAY_WIDTH as usize;
 const FRAMEBUFFER_PIXELS: usize = DISPLAY_WIDTH_USIZE * DISPLAY_HEIGHT as usize;
 const DISPLAY_DMA_BUFFER_SIZE: usize = co5300::MAX_TRANSFER_BYTES;
-const DEFAULT_BRIGHTNESS_PERCENT: u8 = 80;
 
 // These live in statics so spawned tasks can be handed `&'static` references,
 // but every task takes the group it uses as a parameter, so this is the only
@@ -63,19 +66,10 @@ const DEFAULT_BRIGHTNESS_PERCENT: u8 = 80;
 static TOUCH: TouchChannels = TouchChannels::new();
 static PMIC: PmicChannels = PmicChannels::new();
 static RTC: RtcChannels = RtcChannels::new();
-static BRIGHTNESS: BrightnessSignal = BrightnessSignal::new();
+static SETTINGS: SettingsChannel = SettingsChannel::new();
 static BLE: BleSignal = BleSignal::new();
 static USAGE: UsageSignal = UsageSignal::new();
 
-/// How long the panel stays at the brightness you chose before dimming.
-///
-/// This is a battery feature first: nobody is looking at a desk instrument
-/// most of the time. That it also spares the AMOLED is a bonus, not the
-/// reason — the dial is deliberately not shifted around or replaced by a
-/// screensaver, which would cost the readout the device exists to give.
-const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
-/// Dim, not off. The ring stays readable across a desk.
-const IDLE_BRIGHTNESS_PERCENT: u8 = 12;
 /// Two missed host polls make the displayed data stale.
 const DATA_FRESHNESS_TIMEOUT: Duration = Duration::from_secs(150);
 
@@ -157,6 +151,35 @@ fn update_time_dependent_usage(
     ui.set_usage_weekly_reset(format_reset(weekly_reset_mins).into());
 }
 
+fn next_idle_deadline(settings: DisplaySettings, usb_connected: bool) -> Option<Instant> {
+    settings
+        .should_dim(usb_connected)
+        .then(|| Instant::now() + Duration::from_secs(u64::from(settings.idle_timeout_seconds)))
+}
+
+fn persist_settings(
+    store: &mut Option<SettingsStore<'_>>,
+    ui: &MainWindow,
+    settings: DisplaySettings,
+) {
+    let Some(store) = store.as_mut() else {
+        ui.set_settings_storage_status("storage unavailable".into());
+        return;
+    };
+
+    match store.save(settings) {
+        Ok(true) => {
+            info!("Display settings saved and verified");
+            ui.set_settings_storage_status("saved".into());
+        }
+        Ok(false) => ui.set_settings_storage_status("saved".into()),
+        Err(error) => {
+            error!("Display settings save failed: {}", error);
+            ui.set_settings_storage_status("save failed".into());
+        }
+    }
+}
+
 async fn wake_display(
     display: &mut Co5300<'_>,
     window: &MinimalSoftwareWindow,
@@ -218,6 +241,31 @@ async fn main(spawner: Spawner) -> ! {
     esp_rtos::start(timg0.timer0, sw_interrupt.software_interrupt0);
 
     info!("Embassy initialized!");
+
+    let (mut settings_store, mut display_settings, settings_storage_status) =
+        match SettingsStore::new(peripherals.FLASH) {
+            Ok((store, Some(settings))) => {
+                info!("Loaded persisted display settings");
+                (Some(store), settings, "saved")
+            }
+            Ok((mut store, None)) => {
+                let defaults = DisplaySettings::default();
+                match store.save(defaults) {
+                    Ok(_) => {
+                        info!("Persisted and verified default display settings");
+                        (Some(store), defaults, "saved")
+                    }
+                    Err(error) => {
+                        error!("Default display settings save failed: {}", error);
+                        (Some(store), defaults, "save failed")
+                    }
+                }
+            }
+            Err(error) => {
+                error!("Display settings storage unavailable: {}", error);
+                (None, DisplaySettings::default(), "storage unavailable")
+            }
+        };
 
     // Ergot rides a BLE NUS link to the host daemon. This device is an edge
     // node with one interface, so the stack learns the host's net id from the
@@ -283,7 +331,7 @@ async fn main(spawner: Spawner) -> ! {
     );
     display.init(&mut Delay::new()).unwrap();
     display
-        .set_brightness(brightness_register(DEFAULT_BRIGHTNESS_PERCENT))
+        .set_brightness(brightness_register(display_settings.brightness_percent))
         .unwrap();
     info!("CO5300 initialized");
 
@@ -301,14 +349,15 @@ async fn main(spawner: Spawner) -> ! {
 
     let ui = MainWindow::new().unwrap();
     ui.set_ble_status("starting".into());
-    ui.set_brightness_percent(i32::from(DEFAULT_BRIGHTNESS_PERCENT));
-    ui::connect_callbacks(&ui, &BRIGHTNESS, &PMIC);
+    ui.set_settings_storage_status(settings_storage_status.into());
+    update_settings(&ui, display_settings);
+    ui::connect_callbacks(&ui, &SETTINGS);
 
     let channels = UiChannels {
         touch: &TOUCH,
         pmic: &PMIC,
         rtc: &RTC,
-        brightness: &BRIGHTNESS,
+        settings: &SETTINGS,
         ble: &BLE,
         usage: &USAGE,
     };
@@ -317,8 +366,9 @@ async fn main(spawner: Spawner) -> ! {
     let mut latest_usage = UsageSnapshot::UNKNOWN;
     let mut latest_rtc = None;
     let mut ble_connected = false;
+    let mut usb_connected = false;
     let mut last_usage_at = None;
-    let mut idle_deadline = Some(Instant::now() + IDLE_TIMEOUT);
+    let mut idle_deadline = next_idle_deadline(display_settings, usb_connected);
     let mut dimmed = false;
     let started_at = Instant::now();
     let mut displayed_minute = u64::MAX;
@@ -330,9 +380,6 @@ async fn main(spawner: Spawner) -> ! {
     let mut rtc_ready = false;
     let mut application_ready_logged = false;
     let mut display_on = true;
-    // What the user asked for, which idle dimming must not overwrite: waking
-    // and undimming both restore this rather than whatever is on the panel.
-    let mut current_brightness_percent = DEFAULT_BRIGHTNESS_PERCENT;
     let mut maintenance_ticker = Ticker::every(Duration::from_secs(30));
 
     loop {
@@ -399,8 +446,11 @@ async fn main(spawner: Spawner) -> ! {
         // Sleep until a peripheral reports in, periodic maintenance is due,
         // or an animation is due for its next step. Nothing is polled here.
         let animation = slint::platform::duration_until_next_timer_update();
-        // Nothing to count down to while the panel is off or already dim.
-        let active_idle_deadline = display_on.then_some(idle_deadline).flatten();
+        // Keep the settings page readable while the user is inspecting it.
+        // Closing it starts a fresh idle interval.
+        let active_idle_deadline = (display_on && !ui.get_show_settings())
+            .then_some(idle_deadline)
+            .flatten();
         let event = next_ui_event(
             &channels,
             &mut maintenance_ticker,
@@ -420,23 +470,39 @@ async fn main(spawner: Spawner) -> ! {
                     ui.set_show_power_menu(false);
                     if display.sleep().is_ok() {
                         display_on = false;
+                        dimmed = false;
+                        idle_deadline = None;
                         info!("Display asleep (PWR short press)");
                     } else {
                         error!("CO5300 sleep failed");
                     }
                 }
                 PowerKey::Short => {
-                    if wake_display(&mut display, &slint_window, current_brightness_percent).await {
+                    if wake_display(
+                        &mut display,
+                        &slint_window,
+                        display_settings.brightness_percent,
+                    )
+                    .await
+                    {
                         display_on = true;
+                        dimmed = false;
+                        idle_deadline = next_idle_deadline(display_settings, usb_connected);
                         info!("Display awake (PWR short press)");
                     }
                 }
                 PowerKey::Long => {
                     if !display_on
-                        && wake_display(&mut display, &slint_window, current_brightness_percent)
-                            .await
+                        && wake_display(
+                            &mut display,
+                            &slint_window,
+                            display_settings.brightness_percent,
+                        )
+                        .await
                     {
                         display_on = true;
+                        dimmed = false;
+                        idle_deadline = next_idle_deadline(display_settings, usb_connected);
                     }
                     if display_on {
                         ui.set_show_power_menu(true);
@@ -460,12 +526,12 @@ async fn main(spawner: Spawner) -> ! {
                 // countdown again.
                 if dimmed
                     && display
-                        .set_brightness(brightness_register(current_brightness_percent))
+                        .set_brightness(brightness_register(display_settings.brightness_percent))
                         .is_ok()
                 {
                     dimmed = false;
                 }
-                idle_deadline = Some(Instant::now() + IDLE_TIMEOUT);
+                idle_deadline = next_idle_deadline(display_settings, usb_connected);
 
                 // A drag queues reports faster than a frame takes to draw, so
                 // dispatch everything already waiting before rendering. Without
@@ -489,10 +555,27 @@ async fn main(spawner: Spawner) -> ! {
             UiEvent::Pmic(event) => match event {
                 PmicEvent::Online(stats) => {
                     pmic_ready = true;
+                    let usb_changed = usb_connected != stats.vbus_good;
+                    usb_connected = stats.vbus_good;
+                    if !display_settings.should_dim(usb_connected) {
+                        if dimmed
+                            && display_on
+                            && display
+                                .set_brightness(brightness_register(
+                                    display_settings.brightness_percent,
+                                ))
+                                .is_ok()
+                        {
+                            dimmed = false;
+                        }
+                        idle_deadline = None;
+                    } else if usb_changed && display_on && !dimmed && !ui.get_show_settings() {
+                        idle_deadline = next_idle_deadline(display_settings, usb_connected);
+                    }
                     ui.set_pmic_status("AXP2101 online".into());
                     ui.set_battery_known(stats.battery_present);
                     ui.set_battery_percent(i32::from(stats.state_of_charge));
-                    ui.set_usb_connected(stats.vbus_good);
+                    ui.set_usb_connected(usb_connected);
                     ui.set_battery_voltage(if stats.battery_present {
                         format!("{} mV", stats.battery_mv).into()
                     } else {
@@ -540,12 +623,99 @@ async fn main(spawner: Spawner) -> ! {
                     update_time_dependent_usage(&ui, &pace, latest_usage, latest_rtc);
                 }
             },
-            UiEvent::Brightness(percent) => {
-                if display.set_brightness(brightness_register(percent)).is_ok() {
-                    current_brightness_percent = percent;
-                    info!("Display brightness set to {}%", percent);
-                } else {
-                    error!("Display brightness update failed");
+            UiEvent::Settings(action) => {
+                let mut settings_changed = false;
+                let mut normal_brightness_changed = false;
+                match action {
+                    SettingsAction::Open => {
+                        if dimmed
+                            && display
+                                .set_brightness(brightness_register(
+                                    display_settings.brightness_percent,
+                                ))
+                                .is_ok()
+                        {
+                            dimmed = false;
+                        }
+                        ui.set_show_power_menu(false);
+                        ui.set_show_settings(true);
+                        idle_deadline = None;
+                    }
+                    SettingsAction::Close => {
+                        ui.set_show_settings(false);
+                        persist_settings(&mut settings_store, &ui, display_settings);
+                        idle_deadline = next_idle_deadline(display_settings, usb_connected);
+                    }
+                    SettingsAction::BrightnessStep(direction) => {
+                        display_settings.brightness_step(direction);
+                        settings_changed = true;
+                        normal_brightness_changed = true;
+                    }
+                    SettingsAction::ToggleAutoDim => {
+                        display_settings.auto_dim = !display_settings.auto_dim;
+                        settings_changed = true;
+                    }
+                    SettingsAction::ToggleDimOnUsb => {
+                        display_settings.dim_on_usb = !display_settings.dim_on_usb;
+                        settings_changed = true;
+                    }
+                    SettingsAction::IdleTimeoutStep(direction) => {
+                        display_settings.idle_timeout_step(direction);
+                        settings_changed = true;
+                    }
+                    SettingsAction::DimBrightnessStep(direction) => {
+                        display_settings.dim_brightness_step(direction);
+                        settings_changed = true;
+                    }
+                    SettingsAction::PowerOff => {
+                        persist_settings(&mut settings_store, &ui, display_settings);
+                        PMIC.power_off.signal(());
+                    }
+                    SettingsAction::Reboot => {
+                        persist_settings(&mut settings_store, &ui, display_settings);
+                        esp_hal::system::software_reset();
+                    }
+                }
+
+                if settings_changed {
+                    update_settings(&ui, display_settings);
+                    if settings_store.is_some() {
+                        ui.set_settings_storage_status("unsaved".into());
+                    }
+
+                    if normal_brightness_changed {
+                        if display
+                            .set_brightness(brightness_register(
+                                display_settings.brightness_percent,
+                            ))
+                            .is_ok()
+                        {
+                            dimmed = false;
+                            info!(
+                                "Display brightness set to {}%",
+                                display_settings.brightness_percent
+                            );
+                        } else {
+                            error!("Display brightness update failed");
+                        }
+                    }
+
+                    if !display_settings.should_dim(usb_connected) {
+                        if dimmed
+                            && display
+                                .set_brightness(brightness_register(
+                                    display_settings.brightness_percent,
+                                ))
+                                .is_ok()
+                        {
+                            dimmed = false;
+                        }
+                        idle_deadline = None;
+                    } else if ui.get_show_settings() {
+                        idle_deadline = None;
+                    } else if !dimmed {
+                        idle_deadline = next_idle_deadline(display_settings, usb_connected);
+                    }
                 }
             }
             UiEvent::Ble(state) => {
@@ -575,12 +745,19 @@ async fn main(spawner: Spawner) -> ! {
                 update_data_state(&ui, ble_connected, last_usage_at);
             }
             UiEvent::Idle => {
-                if display
-                    .set_brightness(brightness_register(IDLE_BRIGHTNESS_PERCENT))
-                    .is_ok()
+                if display_settings.should_dim(usb_connected)
+                    && display
+                        .set_brightness(brightness_register(
+                            display_settings.dim_brightness_percent,
+                        ))
+                        .is_ok()
                 {
                     dimmed = true;
-                    info!("Panel dimmed after {} s idle", IDLE_TIMEOUT.as_secs());
+                    info!(
+                        "Panel dimmed to {}% after {} s idle",
+                        display_settings.dim_brightness_percent,
+                        display_settings.idle_timeout_seconds
+                    );
                 }
                 // Dimmed already: nothing left to count down to until a touch
                 // restarts it.
