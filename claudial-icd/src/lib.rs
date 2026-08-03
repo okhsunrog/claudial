@@ -25,9 +25,9 @@ use postcard_schema::Schema;
 use serde::{Deserialize, Serialize};
 
 // Not on the wire, but derived from what is: the device turns the stream of
-// snapshots below into a rate. It lives here rather than in the firmware so
-// the arithmetic can be unit-tested on the host.
-pub mod history;
+// snapshots below into a pace. It lives here rather than in the firmware so
+// the time-aware arithmetic can be unit-tested on the host.
+pub mod pace;
 
 /// How the account's limits are currently behaving.
 ///

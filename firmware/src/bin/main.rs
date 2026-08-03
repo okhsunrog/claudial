@@ -14,17 +14,17 @@ use claudial_firmware::ble::{ble_task, usage_task};
 use claudial_firmware::board::{DISPLAY_HEIGHT, DISPLAY_SPI_MHZ, DISPLAY_WIDTH};
 use claudial_firmware::co5300::{self, Co5300, brightness_register};
 use claudial_firmware::events::{
-    BrightnessSignal, PmicChannels, PmicEvent, RtcChannels, RtcEvent, TouchChannels, TouchState,
-    UiChannels, UiEvent, UsageSignal, next_ui_event,
+    BleSignal, BleState, BrightnessSignal, PmicChannels, PmicEvent, RtcChannels, RtcEvent,
+    TouchChannels, TouchState, UiChannels, UiEvent, UsageSignal, next_ui_event,
 };
 use claudial_firmware::frame_stats::{FrameStats, FrameTiming};
 use claudial_firmware::pmic::PowerKey;
 use claudial_firmware::slint_platform::EspPlatform;
 use claudial_firmware::tasks::{SharedI2cBus, pmic_task, rtc_task, touch_task};
 use claudial_firmware::transport::{BLE_MTU, BLE_OUTQ, Stack};
-use claudial_firmware::ui::{self, MainWindow, dispatch_touch_state, push_history, update_clock};
-use claudial_icd::UsageStatus;
-use claudial_icd::history::History;
+use claudial_firmware::ui::{self, MainWindow, dispatch_touch_state, update_clock};
+use claudial_icd::pace::Pace;
+use claudial_icd::{UsageSnapshot, UsageStatus};
 use defmt::{error, info};
 use embassy_executor::Spawner;
 use embassy_sync::mutex::Mutex;
@@ -63,6 +63,7 @@ static TOUCH: TouchChannels = TouchChannels::new();
 static PMIC: PmicChannels = PmicChannels::new();
 static RTC: RtcChannels = RtcChannels::new();
 static BRIGHTNESS: BrightnessSignal = BrightnessSignal::new();
+static BLE: BleSignal = BleSignal::new();
 static USAGE: UsageSignal = UsageSignal::new();
 
 /// How long the panel stays at the brightness you chose before dimming.
@@ -74,13 +75,66 @@ static USAGE: UsageSignal = UsageSignal::new();
 const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 /// Dim, not off. The ring stays readable across a desk.
 const IDLE_BRIGHTNESS_PERCENT: u8 = 12;
+/// Two missed host polls make the displayed data stale.
+const DATA_FRESHNESS_TIMEOUT: Duration = Duration::from_secs(150);
 
-/// Render a reset countdown as `2h 05m`, or `--` when the host has nothing.
+/// Render a compact reset countdown, or `--` when the host has nothing.
 fn format_reset(minutes: u16) -> alloc::string::String {
     if minutes == 0 {
         return "--".into();
     }
-    format!("resets in {}h {:02}m", minutes / 60, minutes % 60)
+    if minutes >= 24 * 60 {
+        return format!("{}d {}h", minutes / (24 * 60), minutes % (24 * 60) / 60);
+    }
+    if minutes >= 60 {
+        return format!("{}h {:02}m", minutes / 60, minutes % 60);
+    }
+    format!("{minutes}m")
+}
+
+fn update_data_state(ui: &MainWindow, ble_connected: bool, last_usage_at: Option<Instant>) {
+    ui.set_ble_connected(ble_connected);
+    ui.set_data_fresh(
+        ble_connected
+            && last_usage_at.is_some_and(|received| received.elapsed() < DATA_FRESHNESS_TIMEOUT),
+    );
+}
+
+fn update_pace(ui: &MainWindow, pace: &Pace, snapshot: UsageSnapshot) {
+    if snapshot.status == UsageStatus::Limited || snapshot.session_pct >= 100 {
+        ui.set_pace_summary("LIMIT REACHED".into());
+        ui.set_pace_warning(true);
+        return;
+    }
+
+    let Some(rate) = pace.rate_per_hour() else {
+        ui.set_pace_summary("MEASURING PACE".into());
+        ui.set_pace_warning(false);
+        return;
+    };
+    if rate == 0 {
+        ui.set_pace_summary("PACE · QUIET".into());
+        ui.set_pace_warning(false);
+        return;
+    }
+    if snapshot.session_reset_mins == 0 || snapshot.status == UsageStatus::Unknown {
+        ui.set_pace_summary(format!("PACE {rate}%/h").into());
+        ui.set_pace_warning(false);
+        return;
+    }
+
+    let remaining = u32::from(100_u8.saturating_sub(snapshot.session_pct));
+    let minutes_to_exhaust = remaining * 60 / u32::from(rate);
+    let exhausts_early = minutes_to_exhaust < u32::from(snapshot.session_reset_mins);
+    ui.set_pace_summary(
+        if exhausts_early {
+            format!("PACE {rate}%/h · TOO FAST")
+        } else {
+            format!("PACE {rate}%/h · ON TRACK")
+        }
+        .into(),
+    );
+    ui.set_pace_warning(exhausts_early);
 }
 
 async fn wake_display(
@@ -158,7 +212,7 @@ async fn main(spawner: Spawner) -> ! {
         )))
     };
     let ble_connector = BleConnector::new(peripherals.BT, Default::default()).unwrap();
-    spawner.spawn(ble_task(ergot_stack, ble_connector).unwrap());
+    spawner.spawn(ble_task(ergot_stack, ble_connector, &BLE).unwrap());
     spawner.spawn(usage_task(ergot_stack, &USAGE).unwrap());
 
     let i2c = I2c::new(
@@ -228,7 +282,7 @@ async fn main(spawner: Spawner) -> ! {
     slint::platform::set_platform(Box::new(EspPlatform::new(slint_window.clone()))).unwrap();
 
     let ui = MainWindow::new().unwrap();
-    ui.set_ble_status("initialized".into());
+    ui.set_ble_status("starting".into());
     ui.set_brightness_percent(i32::from(DEFAULT_BRIGHTNESS_PERCENT));
     ui::connect_callbacks(&ui, &BRIGHTNESS, &PMIC);
 
@@ -237,16 +291,17 @@ async fn main(spawner: Spawner) -> ! {
         pmic: &PMIC,
         rtc: &RTC,
         brightness: &BRIGHTNESS,
+        ble: &BLE,
         usage: &USAGE,
     };
 
-    let history_cells = ui::history_model();
-    ui.set_usage_history(history_cells.clone().into());
-    let mut history = History::new();
+    let mut pace = Pace::new();
+    let mut ble_connected = false;
+    let mut last_usage_at = None;
     let mut idle_deadline = Some(Instant::now() + IDLE_TIMEOUT);
     let mut dimmed = false;
     let started_at = Instant::now();
-    let mut displayed_second = u64::MAX;
+    let mut displayed_minute = u64::MAX;
     let mut rendered_frames = 0_u32;
     let mut frame_stats = FrameStats::default();
     let mut last_touch_position = None;
@@ -258,7 +313,7 @@ async fn main(spawner: Spawner) -> ! {
     // What the user asked for, which idle dimming must not overwrite: waking
     // and undimming both restore this rather than whatever is on the panel.
     let mut current_brightness_percent = DEFAULT_BRIGHTNESS_PERCENT;
-    let mut uptime_ticker = Ticker::every(Duration::from_secs(1));
+    let mut maintenance_ticker = Ticker::every(Duration::from_secs(30));
 
     loop {
         slint::platform::update_timers_and_animations();
@@ -321,14 +376,14 @@ async fn main(spawner: Spawner) -> ! {
             }
         }
 
-        // Sleep until a peripheral reports in, the uptime second rolls over,
-        // or an animation is due for its next step. Nothing is polled.
+        // Sleep until a peripheral reports in, periodic maintenance is due,
+        // or an animation is due for its next step. Nothing is polled here.
         let animation = slint::platform::duration_until_next_timer_update();
         // Nothing to count down to while the panel is off or already dim.
         let active_idle_deadline = display_on.then_some(idle_deadline).flatten();
         let event = next_ui_event(
             &channels,
-            &mut uptime_ticker,
+            &mut maintenance_ticker,
             animation,
             active_idle_deadline,
         )
@@ -415,6 +470,7 @@ async fn main(spawner: Spawner) -> ! {
                 PmicEvent::Online(stats) => {
                     pmic_ready = true;
                     ui.set_pmic_status("AXP2101 online".into());
+                    ui.set_battery_known(stats.battery_present);
                     ui.set_battery_percent(i32::from(stats.state_of_charge));
                     ui.set_battery_charging(stats.charging);
                     ui.set_battery_voltage(if stats.battery_present {
@@ -451,7 +507,7 @@ async fn main(spawner: Spawner) -> ! {
                 RtcEvent::NeedsSetting => {
                     rtc_ready = true;
                     ui.set_clock("--:--".into());
-                    ui.set_rtc_status("waiting for host".into());
+                    ui.set_rtc_status("needs setting".into());
                 }
                 RtcEvent::SaveFailed => {
                     ui.set_rtc_status("set failed".into());
@@ -468,12 +524,31 @@ async fn main(spawner: Spawner) -> ! {
                     error!("Display brightness update failed");
                 }
             }
-            UiEvent::Uptime => {
-                let elapsed_seconds = started_at.elapsed().as_secs();
-                if elapsed_seconds != displayed_second {
-                    displayed_second = elapsed_seconds;
-                    ui.set_uptime(format!("{elapsed_seconds} s").into());
+            UiEvent::Ble(state) => {
+                match state {
+                    BleState::Advertising => {
+                        ble_connected = false;
+                        ui.set_ble_status("advertising".into());
+                    }
+                    BleState::Connected => {
+                        ble_connected = true;
+                        ui.set_ble_status("connected".into());
+                    }
+                    BleState::Error => {
+                        ble_connected = false;
+                        ui.set_ble_status("error".into());
+                    }
                 }
+                update_data_state(&ui, ble_connected, last_usage_at);
+            }
+            UiEvent::Maintenance => {
+                let elapsed_seconds = started_at.elapsed().as_secs();
+                let elapsed_minutes = elapsed_seconds / 60;
+                if elapsed_minutes != displayed_minute {
+                    displayed_minute = elapsed_minutes;
+                    ui.set_uptime(format!("{elapsed_minutes} min").into());
+                }
+                update_data_state(&ui, ble_connected, last_usage_at);
             }
             UiEvent::Idle => {
                 if display
@@ -488,13 +563,14 @@ async fn main(spawner: Spawner) -> ! {
                 idle_deadline = None;
             }
             UiEvent::Usage(snapshot) => {
-                history.push(snapshot.session_pct);
-                push_history(&history_cells, &history);
-                ui.set_usage_rate(match history.rate_per_hour() {
-                    Some(rate) => format!("{rate} %/h over the last half hour").into(),
-                    None => "measuring rate".into(),
-                });
-                ui.set_linked(true);
+                let elapsed_seconds = last_usage_at
+                    .map(|received: Instant| received.elapsed().as_secs().min(u64::from(u32::MAX)))
+                    .unwrap_or(0) as u32;
+                pace.record(snapshot.session_pct, elapsed_seconds);
+                last_usage_at = Some(Instant::now());
+                update_data_state(&ui, ble_connected, last_usage_at);
+                update_pace(&ui, &pace, snapshot);
+                ui.set_usage_known(true);
                 ui.set_usage_session(i32::from(snapshot.session_pct));
                 ui.set_usage_weekly(i32::from(snapshot.weekly_pct));
                 ui.set_usage_session_reset(format_reset(snapshot.session_reset_mins).into());
@@ -507,10 +583,10 @@ async fn main(spawner: Spawner) -> ! {
                     }
                     .into(),
                 );
+                ui.set_usage_limited(snapshot.status == UsageStatus::Limited);
             }
             UiEvent::Animation => {}
         }
     }
 
-    // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.1.0/examples
 }

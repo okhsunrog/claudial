@@ -137,7 +137,7 @@ pub async fn pmic_task(i2c_bus: &'static SharedI2cBus, channels: &'static PmicCh
             Err(_) => error!("AXP2101 power-key poll failed"),
         }
 
-        if first_sample || last_sample.elapsed() >= Duration::from_secs(1) {
+        if first_sample || last_sample.elapsed() >= Duration::from_secs(10) {
             last_sample = Instant::now();
             match pmic::read_stats(&mut axp).await {
                 Ok(stats) => {
@@ -155,7 +155,7 @@ pub async fn pmic_task(i2c_bus: &'static SharedI2cBus, channels: &'static PmicCh
         }
 
         // This interval is the PWR button's latency budget, not the telemetry
-        // rate: the sample above is separately gated to one second, and the
+        // rate: the sample above is separately gated to ten seconds, and the
         // AXP2101 latches key status so a press is only ever delayed, never
         // lost. It stays short because the button should feel immediate;
         // stretching it saves almost nothing, since one register read costs
@@ -193,7 +193,10 @@ pub async fn rtc_task(i2c_bus: &'static SharedI2cBus, channels: &'static RtcChan
         Err(_) => channels.snapshot.signal(RtcEvent::NeedsSetting),
     }
 
-    let mut ticker = Ticker::every(Duration::from_secs(1));
+    // The face does not show seconds. Reading once a minute keeps the
+    // diagnostics clock current without waking the shared I2C bus for data
+    // that is never displayed.
+    let mut ticker = Ticker::every(Duration::from_secs(60));
     loop {
         // Either a set request arrives, or the calendar is due to be re-read.
         // Waiting on both beats polling the request signal on a short timer.

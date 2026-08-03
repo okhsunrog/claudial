@@ -1,34 +1,17 @@
 // The Claudial face.
 //
-// One screen, one overlay, no navigation.
+// One screen, one overlay, no navigation. The two rolling limits share one
+// visual language: session outside, weekly inside. Board telemetry stays out
+// of the way until either corner status indicator is tapped.
 //
-// This is a thing you glance at, not one you operate, so it has no pages, no
-// tabs and no back buttons. The dial answers the three questions worth asking —
-// how much is left, how fast am I spending it, will the week hold — and the
-// board's own telemetry is a diagnostics overlay you open from the status pill
-// when something looks wrong.
-//
-// Two rules from measured frame cost shape the drawing:
-//
-//   - Dots and bars, not filled arcs. A conic-gradient ring is one 400 x 400
-//     fill, some 160 000 pixels at ~0.6 us each. A ring of dots is a few
-//     thousand, and only the dots that changed state repaint.
-//   - Nothing here ticks. Every element changes when a snapshot arrives, once
-//     a minute, so the panel renders no frames at all in between. The clock is
-//     hours and minutes for the same reason; seconds would repaint the whole
-//     dial sixty times more often than the data behind it changes.
+// Dots are intentional. A filled arc dirties most of the 480 x 480 panel;
+// changing a percentage here repaints only the dots whose state changed.
 
 global Palette {
     out property <color> bg: #000000;
     out property <color> ink: #f7f4f0;
-    // Deliberately brighter than a desktop theme would use. This is read at
-    // arm's length across a desk, often dimmed, so the low-contrast greys that
-    // look refined on a monitor are simply unreadable here.
     out property <color> mid: #a49a91;
     out property <color> dim: #776e66;
-    // Warm coral for the session window, amber for the weekly one: two warm
-    // hues that stay apart on AMOLED black without either reading as an alarm
-    // until it actually is one.
     out property <color> session: #e08a63;
     out property <color> weekly: #d9a441;
     out property <color> danger: #e0534f;
@@ -38,14 +21,10 @@ global Palette {
     out property <color> panel-line: #322b27;
 }
 
-// The session ring.
-//
-// `lit` rounds up so a window that has only just been touched still shows one
-// lit dot rather than reading as untouched.
 component DotRing inherits Rectangle {
     in property <int> count: 60;
     in property <length> radius: 196px;
-    in property <length> dot: 13px;
+    in property <length> dot: 12px;
     in property <int> percent: 0;
     in property <color> accent;
 
@@ -65,13 +44,12 @@ component DotRing inherits Rectangle {
     }
 }
 
-// Battery drawn from rectangles rather than a glyph: the embedded font has no
-// battery, and a shape that fills as the charge does says more than a number.
 component BatteryIcon inherits Rectangle {
     in property <int> percent: 0;
     in property <bool> charging: false;
+    in property <bool> known: false;
 
-    property <color> tint: root.charging ? Palette.ok : root.percent <= 15 ? Palette.danger : Palette.mid;
+    property <color> tint: !root.known ? Palette.dim : root.charging ? Palette.ok : root.percent <= 15 ? Palette.danger : Palette.mid;
 
     width: 26px;
     height: 14px;
@@ -86,14 +64,13 @@ component BatteryIcon inherits Rectangle {
         Rectangle {
             x: 2.5px;
             y: 2.5px;
-            width: Math.max(0, Math.min(100, root.percent)) * 17px / 100;
+            width: root.known ? Math.max(0, Math.min(100, root.percent)) * 17px / 100 : 0px;
             height: parent.height - 5px;
             border-radius: 2px;
             background: root.tint;
         }
     }
 
-    // The nub.
     Rectangle {
         x: 22px;
         y: 4px;
@@ -104,38 +81,13 @@ component BatteryIcon inherits Rectangle {
     }
 }
 
-// Rate of spend over the session window, one bar per bucket.
-//
-// This is the question the percentage cannot answer: 40 % in half an hour and
-// 40 % over four hours look identical on the ring and mean very different
-// things. Bars are normalised to the busiest bucket, so the shape shows the
-// pattern of the window rather than an absolute that would flatten to nothing
-// on a quiet day.
-component Sparkline inherits Rectangle {
-    in property <[float]> buckets;
-    in property <color> accent;
-
-    property <length> gap: 1px;
-    property <length> bar: (root.width - root.gap * (root.buckets.length - 1)) / Math.max(1, root.buckets.length);
-
-    for v[i] in root.buckets: Rectangle {
-        x: i * (root.bar + root.gap);
-        width: root.bar;
-        // A floor of one pixel keeps an idle stretch visible as a baseline
-        // instead of a gap, so the window's length always reads.
-        height: Math.max(1px, v * root.height);
-        y: root.height - self.height;
-        background: v > 0 ? root.accent : Palette.track;
-    }
-}
-
 component StepButton inherits Rectangle {
     in property <string> label;
     callback clicked();
 
-    width: 46px;
-    height: 40px;
-    border-radius: 12px;
+    width: 52px;
+    height: 52px;
+    border-radius: 14px;
     background: touch.pressed ? Palette.session : Palette.track;
 
     touch := TouchArea {
@@ -161,22 +113,24 @@ component InfoRow inherits Rectangle {
     in property <string> value;
     in property <color> accent: Palette.ink;
 
-    height: 30px;
+    height: 25px;
 
     Text {
-        x: 0px;
+        width: 116px;
         text: root.label;
         color: Palette.dim;
-        font-size: 14px;
+        font-size: 13px;
         vertical-alignment: center;
         height: 100%;
     }
 
     Text {
-        x: parent.width - self.width;
+        x: 116px;
+        width: parent.width - 116px;
         text: root.value;
         color: root.accent;
-        font-size: 14px;
+        font-size: 13px;
+        horizontal-alignment: right;
         vertical-alignment: center;
         height: 100%;
     }
@@ -184,22 +138,27 @@ component InfoRow inherits Rectangle {
 
 export component MainWindow inherits Window {
     // Usage — the reason the thing exists.
+    in property <bool> usage-known: false;
+    in property <bool> usage-limited: false;
     in property <int> usage-session: 0;
     in property <int> usage-weekly: 0;
     in property <string> usage-session-reset: "--";
     in property <string> usage-weekly-reset: "--";
-    in property <string> usage-rate: "";
-    in property <[float]> usage-history;
-    in property <bool> linked: false;
+    in property <string> pace-summary: "MEASURING PACE";
+    in property <bool> pace-warning: false;
 
-    // Status.
+    // The corner indicators describe user-visible state. BLE transport state
+    // and account status remain available separately in diagnostics.
+    in property <bool> ble-connected: false;
+    in property <bool> data-fresh: false;
+    in property <bool> battery-known: false;
     in property <int> battery-percent: 0;
     in property <bool> battery-charging: false;
-    in property <string> clock: "--:--";
 
     // Diagnostics only.
-    in property <string> uptime: "0 s";
-    in property <string> ble-status: "initialized";
+    in property <string> clock: "--:--";
+    in property <string> uptime: "0 min";
+    in property <string> ble-status: "starting";
     in property <string> touch-status: "starting";
     in property <string> pmic-status: "probing";
     in property <string> battery-voltage: "--";
@@ -208,7 +167,7 @@ export component MainWindow inherits Window {
     in property <string> pmic-temperature: "--";
     in property <string> power-source: "probing";
     in property <string> usage-status: "waiting for host";
-    in property <string> rtc-status: "waiting for host";
+    in property <string> rtc-status: "starting";
 
     in-out property <int> brightness-percent: 80;
     in-out property <bool> show-diagnostics: false;
@@ -218,99 +177,115 @@ export component MainWindow inherits Window {
     callback power-off();
     callback reboot();
 
-    property <color> session-accent: root.usage-session >= 100 ? Palette.danger : Palette.session;
-    property <color> weekly-accent: root.usage-weekly >= 100 ? Palette.danger : Palette.weekly;
+    property <string> data-label: !root.ble-connected ? "OFFLINE" : root.data-fresh ? "LIVE" : "STALE";
+    property <color> data-accent: !root.ble-connected ? Palette.danger : root.data-fresh ? Palette.ok : Palette.weekly;
+    property <color> session-accent: root.usage-limited || root.usage-session >= 100 ? Palette.danger : Palette.session;
+    property <color> weekly-accent: root.usage-limited || root.usage-weekly >= 100 ? Palette.danger : Palette.weekly;
 
     width: 480px;
     height: 480px;
     background: Palette.bg;
     title: "Claudial";
 
+    // --- Dial -------------------------------------------------------------
+
     DotRing {
-        count: 60;
-        radius: 196px;
-        dot: 13px;
+        count: 64;
+        radius: 205px;
+        dot: 12px;
         percent: root.usage-session;
         accent: root.session-accent;
     }
 
-    // --- Status pill ------------------------------------------------------
-    //
-    // Also the way into diagnostics: the place you look when you want to know
-    // whether the thing is connected is the place that tells you more.
+    DotRing {
+        count: 52;
+        radius: 176px;
+        dot: 9px;
+        percent: root.usage-weekly;
+        accent: root.weekly-accent;
+    }
 
-    status := TouchArea {
-        x: 140px;
-        y: 76px;
-        width: 200px;
-        height: 34px;
+    // The visible indicators are compact, but the targets are large enough
+    // for a finger. Both lead to the same diagnostics overlay.
+    battery-touch := TouchArea {
+        x: 20px;
+        y: 16px;
+        width: 128px;
+        height: 58px;
         clicked => {
             root.show-diagnostics = true;
         }
 
         Rectangle {
-            border-radius: 17px;
-            background: status.pressed ? Palette.track : Palette.panel;
-            border-width: 1px;
-            border-color: Palette.panel-line;
+            border-radius: 16px;
+            background: battery-touch.pressed ? Palette.panel : #00000000;
 
             BatteryIcon {
-                x: 16px;
-                y: 10px;
+                x: 12px;
+                y: 22px;
                 percent: root.battery-percent;
                 charging: root.battery-charging;
+                known: root.battery-known;
             }
 
             Text {
-                x: 48px;
-                text: root.battery-percent + "%";
-                color: Palette.mid;
-                font-size: 14px;
+                x: 46px;
+                width: 72px;
+                height: 100%;
+                text: root.battery-known ? root.battery-percent + "%" : "--";
+                color: root.battery-known && root.battery-percent <= 15 ? Palette.danger : Palette.mid;
+                font-size: 15px;
                 font-weight: 600;
                 vertical-alignment: center;
-                height: 100%;
-            }
-
-            Rectangle {
-                x: 100px;
-                y: 11px;
-                width: 1px;
-                height: 12px;
-                background: Palette.panel-line;
-            }
-
-            Rectangle {
-                x: 118px;
-                y: 14px;
-                width: 7px;
-                height: 7px;
-                border-radius: 3.5px;
-                background: root.linked ? Palette.ok : Palette.danger;
-            }
-
-            Text {
-                x: 133px;
-                text: root.linked ? "LINK" : "NO HOST";
-                color: root.linked ? Palette.mid : Palette.danger;
-                font-size: 13px;
-                font-weight: 600;
-                letter-spacing: 0.5px;
-                vertical-alignment: center;
-                height: 100%;
             }
         }
     }
 
-    // --- Session ----------------------------------------------------------
+    data-touch := TouchArea {
+        x: 332px;
+        y: 16px;
+        width: 128px;
+        height: 58px;
+        clicked => {
+            root.show-diagnostics = true;
+        }
+
+        Rectangle {
+            border-radius: 16px;
+            background: data-touch.pressed ? Palette.panel : #00000000;
+
+            Rectangle {
+                x: 36px;
+                y: 25px;
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: root.data-accent;
+            }
+
+            Text {
+                x: 52px;
+                width: 64px;
+                height: 100%;
+                text: root.data-label;
+                color: root.data-accent;
+                font-size: 14px;
+                font-weight: 700;
+                letter-spacing: 0.6px;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+        }
+    }
 
     Text {
         x: 0px;
-        y: 118px;
+        y: 112px;
         width: 480px;
         height: 96px;
-        text: root.usage-session + "%";
+        text: root.usage-known ? root.usage-session + "%" : "--";
         color: root.session-accent;
-        font-size: 84px;
+        font-size: 80px;
         font-weight: 800;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -318,107 +293,63 @@ export component MainWindow inherits Window {
 
     Text {
         x: 0px;
-        y: 214px;
+        y: 206px;
         width: 480px;
-        text: "SESSION  ·  " + root.usage-session-reset;
+        height: 24px;
+        text: "SESSION USED  ·  RESETS " + root.usage-session-reset;
         color: Palette.mid;
         font-size: 15px;
-        letter-spacing: 0.8px;
+        letter-spacing: 0.7px;
         horizontal-alignment: center;
-    }
-
-    // --- Rate -------------------------------------------------------------
-
-    Sparkline {
-        x: 140px;
-        y: 250px;
-        width: 200px;
-        height: 34px;
-        buckets: root.usage-history;
-        accent: root.session-accent;
-    }
-
-    Text {
-        x: 0px;
-        y: 290px;
-        width: 480px;
-        text: root.usage-rate;
-        color: Palette.dim;
-        font-size: 13px;
-        letter-spacing: 0.6px;
-        horizontal-alignment: center;
+        vertical-alignment: center;
     }
 
     Rectangle {
-        x: 160px;
-        y: 316px;
-        width: 160px;
+        x: 170px;
+        y: 246px;
+        width: 140px;
         height: 1px;
         background: Palette.panel-line;
     }
 
-    // --- Weekly -----------------------------------------------------------
-
     Text {
-        x: 130px;
-        y: 332px;
-        width: 120px;
-        height: 22px;
-        text: "WEEKLY";
-        color: Palette.dim;
-        font-size: 13px;
-        letter-spacing: 1px;
-        vertical-alignment: center;
-    }
-
-    Text {
-        x: 230px;
-        y: 332px;
-        width: 120px;
-        height: 22px;
-        text: root.usage-weekly + "%";
+        x: 0px;
+        y: 258px;
+        width: 480px;
+        height: 52px;
+        text: root.usage-known ? root.usage-weekly + "%" : "--";
         color: root.weekly-accent;
-        font-size: 18px;
+        font-size: 40px;
         font-weight: 700;
-        horizontal-alignment: right;
+        horizontal-alignment: center;
         vertical-alignment: center;
     }
 
-    Rectangle {
-        x: 130px;
-        y: 362px;
-        width: 220px;
-        height: 10px;
-        border-radius: 5px;
-        background: Palette.track;
-
-        Rectangle {
-            x: 0px;
-            width: Math.max(0, Math.min(100, root.usage-weekly)) * parent.width / 100;
-            height: 100%;
-            border-radius: 5px;
-            background: root.weekly-accent;
-        }
-    }
-
     Text {
         x: 0px;
-        y: 380px;
+        y: 310px;
         width: 480px;
-        text: root.usage-weekly-reset;
-        color: Palette.dim;
-        font-size: 13px;
+        height: 24px;
+        text: "WEEKLY USED  ·  RESETS " + root.usage-weekly-reset;
+        color: Palette.mid;
+        font-size: 14px;
+        letter-spacing: 0.7px;
         horizontal-alignment: center;
+        vertical-alignment: center;
     }
 
     Text {
         x: 0px;
-        y: 406px;
+        y: 358px;
         width: 480px;
-        text: root.clock;
-        color: Palette.dim;
+        height: 28px;
+        text: root.pace-summary;
+        color: root.pace-warning ? Palette.danger : Palette.dim;
         font-size: 15px;
+        font-weight: root.pace-warning ? 700 : 500;
+        letter-spacing: 0.6px;
         horizontal-alignment: center;
+        vertical-alignment: center;
     }
 
     // --- Diagnostics ------------------------------------------------------
@@ -435,11 +366,11 @@ export component MainWindow inherits Window {
         }
 
         Rectangle {
-            x: 56px;
-            y: 56px;
-            width: 368px;
-            height: 368px;
-            border-radius: 24px;
+            x: 38px;
+            y: 34px;
+            width: 404px;
+            height: 412px;
+            border-radius: 26px;
             background: Palette.panel;
             border-width: 1px;
             border-color: Palette.panel-line;
@@ -447,78 +378,62 @@ export component MainWindow inherits Window {
             // Keeps taps inside the card from reaching the dismiss backdrop.
             TouchArea { }
 
+            Text {
+                x: 28px;
+                y: 16px;
+                width: 348px;
+                height: 22px;
+                text: "SYSTEM";
+                color: Palette.dim;
+                font-size: 12px;
+                letter-spacing: 1.6px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
             VerticalLayout {
-                x: 40px;
-                y: 28px;
-                width: 288px;
+                x: 28px;
+                y: 44px;
+                width: 348px;
                 spacing: 0px;
 
                 InfoRow {
-                    label: "Host link";
+                    label: "Data";
+                    value: root.data-label;
+                    accent: root.data-accent;
+                }
+
+                InfoRow {
+                    label: "Account";
                     value: root.usage-status;
-                    accent: root.linked ? Palette.ok : Palette.danger;
+                    accent: root.usage-limited ? Palette.danger : Palette.ink;
                 }
 
-                InfoRow {
-                    label: "BLE";
-                    value: root.ble-status;
-                }
-
-                InfoRow {
-                    label: "Clock";
-                    value: root.rtc-status;
-                }
-
-                InfoRow {
-                    label: "Touch";
-                    value: root.touch-status;
-                }
-
-                InfoRow {
-                    label: "PMIC";
-                    value: root.pmic-status;
-                }
-
-                InfoRow {
-                    label: "Battery";
-                    value: root.battery-voltage;
-                }
-
-                InfoRow {
-                    label: "VBUS / VSYS";
-                    value: root.vbus-voltage + "  " + root.vsys-voltage;
-                }
-
-                InfoRow {
-                    label: "Die temp";
-                    value: root.pmic-temperature;
-                }
-
-                InfoRow {
-                    label: "Source";
-                    value: root.power-source;
-                }
-
-                InfoRow {
-                    label: "Uptime";
-                    value: root.uptime;
-                }
+                InfoRow { label: "BLE"; value: root.ble-status; }
+                InfoRow { label: "Clock"; value: root.clock + " · " + root.rtc-status; }
+                InfoRow { label: "Touch"; value: root.touch-status; }
+                InfoRow { label: "PMIC"; value: root.pmic-status; }
+                InfoRow { label: "Battery"; value: root.battery-voltage; }
+                InfoRow { label: "VBUS / VSYS"; value: root.vbus-voltage + " · " + root.vsys-voltage; }
+                InfoRow { label: "Die temp"; value: root.pmic-temperature; }
+                InfoRow { label: "Source"; value: root.power-source; }
+                InfoRow { label: "Uptime"; value: root.uptime; }
             }
 
             Text {
-                x: 40px;
-                y: 344px;
+                x: 28px;
+                y: 332px;
                 width: 90px;
-                height: 40px;
+                height: 52px;
                 text: "Brightness";
                 color: Palette.dim;
-                font-size: 14px;
+                font-size: 13px;
                 vertical-alignment: center;
             }
 
             StepButton {
-                x: 140px;
-                y: 344px;
+                x: 122px;
+                y: 332px;
                 label: "-";
                 clicked => {
                     root.brightness-step(-5);
@@ -526,10 +441,10 @@ export component MainWindow inherits Window {
             }
 
             Text {
-                x: 190px;
-                y: 344px;
-                width: 46px;
-                height: 40px;
+                x: 178px;
+                y: 332px;
+                width: 44px;
+                height: 52px;
                 text: root.brightness-percent + "%";
                 color: Palette.ink;
                 font-size: 14px;
@@ -538,8 +453,8 @@ export component MainWindow inherits Window {
             }
 
             StepButton {
-                x: 240px;
-                y: 344px;
+                x: 226px;
+                y: 332px;
                 label: "+";
                 clicked => {
                     root.brightness-step(5);
@@ -547,17 +462,17 @@ export component MainWindow inherits Window {
             }
 
             power-touch := TouchArea {
-                x: 296px;
-                y: 344px;
-                width: 40px;
-                height: 40px;
+                x: 324px;
+                y: 332px;
+                width: 52px;
+                height: 52px;
                 clicked => {
                     root.show-diagnostics = false;
                     root.show-power-menu = true;
                 }
 
                 Rectangle {
-                    border-radius: 12px;
+                    border-radius: 14px;
                     background: power-touch.pressed ? Palette.danger : Palette.track;
 
                     Text {

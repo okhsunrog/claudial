@@ -7,20 +7,18 @@
 
 extern crate alloc;
 
-use alloc::rc::Rc;
-use alloc::{format, vec};
+use alloc::format;
+use slint::PhysicalPosition;
 use slint::platform::software_renderer::MinimalSoftwareWindow;
 use slint::platform::{PointerEventButton, WindowEvent};
-use slint::{Model, PhysicalPosition, VecModel};
 
 use crate::co5300::MINIMUM_BRIGHTNESS_PERCENT;
 use crate::events::{BrightnessSignal, PmicChannels, TouchState};
 use crate::rtc::Snapshot as RtcSnapshot;
-use claudial_icd::history::{BUCKETS, History};
 
 slint::include_modules!();
 
-/// Push the clock into the status line.
+/// Push the minute-resolution clock into diagnostics.
 ///
 /// Hours and minutes only. Seconds would repaint the dial sixty times more
 /// often than any of the data on it changes, and on a page carrying the ring
@@ -32,25 +30,7 @@ pub fn update_clock(ui: &MainWindow, snapshot: RtcSnapshot) {
         ui.set_rtc_status("synced".into());
     } else {
         ui.set_clock("--:--".into());
-        ui.set_rtc_status("waiting for host".into());
-    }
-}
-
-/// Backing model for the sparkline: one normalised height per bucket.
-pub fn history_model() -> Rc<VecModel<f32>> {
-    Rc::new(VecModel::from(vec![0.0_f32; BUCKETS]))
-}
-
-/// Push fresh history into the sparkline, writing only the bars that moved.
-///
-/// The comparison matters for the same reason it did for the sprite grid this
-/// replaces: assigning every bar unconditionally would mark all sixty
-/// rectangles dirty, so a quiet minute would repaint the whole chart.
-pub fn push_history(model: &VecModel<f32>, history: &History) {
-    for (i, value) in history.buckets().into_iter().enumerate() {
-        if model.row_data(i) != Some(value) {
-            model.set_row_data(i, value);
-        }
+        ui.set_rtc_status("needs setting".into());
     }
 }
 

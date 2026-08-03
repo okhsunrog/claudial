@@ -18,7 +18,7 @@ use static_cell::StaticCell;
 use trouble_host::prelude::*;
 
 use crate::ble_nus::{NUS_MAX_PAYLOAD, NusServer};
-use crate::events::UsageSignal;
+use crate::events::{BleSignal, BleState, UsageSignal};
 use crate::transport::{BLE_OUTQ, Stack};
 use claudial_icd::UsageTopic;
 
@@ -58,7 +58,11 @@ pub async fn usage_task(stack: &'static Stack, usage: &'static UsageSignal) {
     clippy::large_stack_frames,
     reason = "Embassy stores the async task state statically rather than on the runtime call stack"
 )]
-pub async fn ble_task(stack: &'static Stack, connector: BleConnector<'static>) {
+pub async fn ble_task(
+    stack: &'static Stack,
+    connector: BleConnector<'static>,
+    state: &'static BleSignal,
+) {
     let controller = ExternalController::<_, CONNECTIONS_MAX>::new(connector);
 
     static RESOURCES: StaticCell<
@@ -79,12 +83,13 @@ pub async fn ble_task(stack: &'static Stack, connector: BleConnector<'static>) {
         appearance: &appearance::human_interface_device::GENERIC_HUMAN_INTERFACE_DEVICE,
     })) else {
         warn!("[ble] GATT server init failed");
+        state.signal(BleState::Error);
         return;
     };
 
     join(
         run_controller(runner),
-        accept_loop(stack, &mut peripheral, &server),
+        accept_loop(stack, &mut peripheral, &server, state),
     )
     .await;
 }
@@ -103,15 +108,21 @@ async fn accept_loop<'values, C: Controller>(
     stack: &'static Stack,
     peripheral: &mut Peripheral<'values, C, DefaultPacketPool>,
     server: &NusServer<'values>,
+    state: &'static BleSignal,
 ) {
     loop {
+        state.signal(BleState::Advertising);
         match advertise(peripheral, server).await {
             Ok(connection) => {
                 info!("[ble] host connected");
+                state.signal(BleState::Connected);
                 connection_task(stack, server, &connection).await;
                 info!("[ble] host disconnected");
             }
-            Err(_) => warn!("[ble] advertise failed, retrying"),
+            Err(_) => {
+                state.signal(BleState::Error);
+                warn!("[ble] advertise failed, retrying");
+            }
         }
     }
 }

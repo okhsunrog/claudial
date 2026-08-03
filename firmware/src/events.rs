@@ -1,7 +1,7 @@
 //! Events flowing from the peripheral tasks to the UI loop, and the endpoints
 //! they travel over.
 
-use embassy_futures::select::{Either4, select4};
+use embassy_futures::select::{Either, Either4, select, select4};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
@@ -13,8 +13,16 @@ use crate::pmic::{PmicStats, PowerKey};
 use crate::rtc::{DateTime as RtcDateTime, Snapshot as RtcSnapshot};
 
 pub type BrightnessSignal = Signal<CriticalSectionRawMutex, u8>;
+pub type BleSignal = Signal<CriticalSectionRawMutex, BleState>;
 /// Latest usage snapshot pushed by the host daemon.
 pub type UsageSignal = Signal<CriticalSectionRawMutex, UsageSnapshot>;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum BleState {
+    Advertising,
+    Connected,
+    Error,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum TouchState {
@@ -104,7 +112,8 @@ pub enum UiEvent {
     Pmic(PmicEvent),
     Rtc(RtcEvent),
     Brightness(u8),
-    Uptime,
+    Ble(BleState),
+    Maintenance,
     Animation,
     /// Nobody has touched the panel for a while; dim it.
     Idle,
@@ -119,6 +128,7 @@ pub struct UiChannels {
     pub pmic: &'static PmicChannels,
     pub rtc: &'static RtcChannels,
     pub brightness: &'static BrightnessSignal,
+    pub ble: &'static BleSignal,
     pub usage: &'static UsageSignal,
 }
 
@@ -141,7 +151,7 @@ pub struct UiChannels {
 /// schedule immediately before every call.
 pub async fn next_ui_event(
     channels: &UiChannels,
-    uptime: &mut Ticker,
+    maintenance: &mut Ticker,
     animation: Option<core::time::Duration>,
     idle_deadline: Option<Instant>,
 ) -> UiEvent {
@@ -150,6 +160,7 @@ pub async fn next_ui_event(
         pmic,
         rtc,
         brightness,
+        ble,
         usage,
     } = channels;
     let peripherals = select4(
@@ -162,12 +173,12 @@ pub async fn next_ui_event(
         async { UiEvent::Rtc(rtc.snapshot.wait().await) },
         async { UiEvent::Brightness(brightness.wait().await) },
         async {
-            uptime.next().await;
-            UiEvent::Uptime
+            maintenance.next().await;
+            UiEvent::Maintenance
         },
         async {
             // No animation running means there is no deadline at all, so the
-            // loop sleeps until a peripheral or the uptime tick wakes it.
+            // loop sleeps until a peripheral or maintenance tick wakes it.
             match animation {
                 Some(remaining) => {
                     Timer::after(Duration::from_micros(remaining.as_micros() as u64)).await;
@@ -181,7 +192,7 @@ pub async fn next_ui_event(
     // The idle timeout is the one deadline that must be absolute. Every touch
     // pushes it further out, and this future is rebuilt whenever any other
     // event wins the select — a relative timer would restart the countdown on
-    // every uptime tick and the panel would never dim. Already dimmed means
+    // every maintenance tick and the panel would never dim. Already dimmed means
     // there is no deadline, so this branch just sleeps.
     let idle = async {
         match idle_deadline {
@@ -191,9 +202,14 @@ pub async fn next_ui_event(
         UiEvent::Idle
     };
 
-    let usage = async { UiEvent::Usage(usage.wait().await) };
+    let data = async {
+        match select(ble.wait(), usage.wait()).await {
+            Either::First(state) => UiEvent::Ble(state),
+            Either::Second(snapshot) => UiEvent::Usage(snapshot),
+        }
+    };
 
-    match select4(peripherals, rest, idle, usage).await {
+    match select4(peripherals, rest, idle, data).await {
         Either4::First(event) | Either4::Second(event) => match event {
             Either4::First(event)
             | Either4::Second(event)
