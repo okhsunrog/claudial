@@ -832,7 +832,47 @@ dependencies = [
 ]
 
 [[package]]
-name = "clawdmeter-icd"
+name = "claudial-firmware"
+version = "0.1.0"
+dependencies = [
+ "axp2101-dd",
+ "bbqueue",
+ "bt-hci",
+ "bytemuck",
+ "claudial-icd",
+ "critical-section",
+ "cst92xx",
+ "defmt 1.1.1",
+ "embassy-embedded-hal",
+ "embassy-executor",
+ "embassy-futures",
+ "embassy-sync 0.8.0",
+ "embassy-time",
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
+ "embedded-io 0.7.1",
+ "embedded-io-async 0.7.0",
+ "embedded-test",
+ "ergot",
+ "esp-alloc",
+ "esp-bootloader-esp-idf",
+ "esp-hal",
+ "esp-radio",
+ "esp-rtos",
+ "heapless 0.9.3",
+ "mutex",
+ "panic-rtt-target",
+ "pcf85063a",
+ "rtt-target",
+ "slint",
+ "slint-build",
+ "static_cell",
+ "time",
+ "trouble-host",
+]
+
+[[package]]
+name = "claudial-icd"
 version = "0.1.0"
 dependencies = [
  "ergot",
@@ -7084,46 +7124,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc1b4cb0cc549fcf58d7dfc081778139b3d283a081644e833e84682ad71cea24"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "waveshare-esp32s3-amoled-2-16"
-version = "0.1.0"
-dependencies = [
- "axp2101-dd",
- "bbqueue",
- "bt-hci",
- "bytemuck",
- "clawdmeter-icd",
- "critical-section",
- "cst92xx",
- "defmt 1.1.1",
- "embassy-embedded-hal",
- "embassy-executor",
- "embassy-futures",
- "embassy-sync 0.8.0",
- "embassy-time",
- "embedded-hal 1.0.0",
- "embedded-hal-async",
- "embedded-io 0.7.1",
- "embedded-io-async 0.7.0",
- "embedded-test",
- "ergot",
- "esp-alloc",
- "esp-bootloader-esp-idf",
- "esp-hal",
- "esp-radio",
- "esp-rtos",
- "heapless 0.9.3",
- "mutex",
- "panic-rtt-target",
- "pcf85063a",
- "rtt-target",
- "slint",
- "slint-build",
- "static_cell",
- "time",
- "trouble-host",
 ]
 
 [[package]]

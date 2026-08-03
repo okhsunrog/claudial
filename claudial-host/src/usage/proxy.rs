@@ -14,15 +14,15 @@
 
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
-use clawdmeter_icd::{UsageSnapshot, UsageStatus};
+use claudial_icd::{UsageSnapshot, UsageStatus};
 use serde::Deserialize;
 use tracing::{debug, warn};
 
 use super::{clamp_minutes, clamp_percent};
 
-const URL_VAR: &str = "CLAWDMETER_PROXY_URL";
-const USERNAME_VAR: &str = "CLAWDMETER_PROXY_USERNAME";
-const PASSWORD_VAR: &str = "CLAWDMETER_PROXY_PASSWORD";
+const URL_VAR: &str = "CLAUDIAL_PROXY_URL";
+const USERNAME_VAR: &str = "CLAUDIAL_PROXY_USERNAME";
+const PASSWORD_VAR: &str = "CLAUDIAL_PROXY_PASSWORD";
 
 pub struct UsageClient {
     http: reqwest::Client,

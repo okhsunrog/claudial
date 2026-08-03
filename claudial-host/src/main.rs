@@ -1,4 +1,4 @@
-//! Host daemon: pushes Claude usage to a Clawdmeter over BLE.
+//! Host daemon: pushes Claude usage to a Claudial over BLE.
 //!
 //! Where the numbers come from is a compile-time choice between two backends —
 //! see [`usage`]. Either way it runs on a host rather than on the device,
@@ -13,7 +13,7 @@ mod usage;
 use std::time::Duration;
 
 use anyhow::Result;
-use clawdmeter_icd::UsageTopic;
+use claudial_icd::UsageTopic;
 use ergot::interface_manager::{InterfaceState, Profile};
 use tracing::{info, warn};
 
@@ -32,7 +32,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "clawdmeter_host=info".into()),
+                .unwrap_or_else(|_| "claudial_host=info".into()),
         )
         .init();
 

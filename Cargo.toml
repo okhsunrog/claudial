@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["clawdmeter-icd", "clawdmeter-host"]
+members = ["claudial-icd", "claudial-host"]
 exclude = [
   "firmware", # Different toolchain (xtensa-esp32s3-none-elf, channel "esp")
 ]
@@ -23,7 +23,7 @@ undocumented_unsafe_blocks = "warn"
 unused_async = "warn"
 
 [workspace.dependencies]
-clawdmeter-icd = { path = "clawdmeter-icd" }
+claudial-icd = { path = "claudial-icd" }
 # Pinned to a rev for reproducible builds, matching how oxifoc consumes ergot.
 # Bump here and in firmware/Cargo.toml together, then refresh both lockfiles.
 ergot = { git = "https://github.com/okhsunrog/ergot", rev = "8d7db27e030564a048eb16c90080ae6730d14e11" }

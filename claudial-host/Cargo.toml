@@ -1,11 +1,11 @@
 [package]
-name = "clawdmeter-host"
+name = "claudial-host"
 version = "0.1.0"
 edition = "2024"
-description = "Reads Claude Code usage and pushes it to a Clawdmeter over BLE"
+description = "Reads Claude Code usage and pushes it to a Claudial over BLE"
 
 [dependencies]
-clawdmeter-icd = { workspace = true }
+claudial-icd = { workspace = true }
 ergot = { workspace = true, features = ["tokio-std"] }
 serde = { workspace = true, features = ["std"] }
 

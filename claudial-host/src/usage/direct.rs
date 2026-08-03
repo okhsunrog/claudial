@@ -7,7 +7,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow};
-use clawdmeter_icd::{UsageSnapshot, UsageStatus};
+use claudial_icd::{UsageSnapshot, UsageStatus};
 use reqwest::header::HeaderMap;
 use serde_json::json;
 use tracing::debug;

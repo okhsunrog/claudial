@@ -7,7 +7,7 @@ use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Ticker, Timer};
 
-use clawdmeter_icd::UsageSnapshot;
+use claudial_icd::UsageSnapshot;
 
 use crate::pmic::{PmicStats, PowerKey};
 use crate::rtc::{DateTime as RtcDateTime, Snapshot as RtcSnapshot};

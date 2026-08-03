@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Generate src/animations.rs.
 
-The sprites are procedural and original to this repository. The upstream
-Clawdmeter project scrapes its artwork from claudepix, which is copyrighted
-Anthropic material; nothing from there is used here.
+The sprites are procedural and original to this repository. The Clawdmeter
+project this one takes its idea from scrapes its artwork from claudepix, which
+is copyrighted Anthropic material; nothing from there is used here.
 
 Run:  uv run tools/gen_animations.py
 

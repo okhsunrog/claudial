@@ -75,8 +75,8 @@ deliberately **excluded** from it: the firmware builds for
 `xtensa-esp32s3-none-elf` on the `esp` toolchain channel, so it keeps its own
 `rust-toolchain.toml`, its own `.cargo/config.toml` and its own lockfile.
 
-- `clawdmeter-icd/` — wire types shared by firmware and host (workspace member)
-- `clawdmeter-host/` — host daemon (workspace member)
+- `claudial-icd/` — wire types shared by firmware and host (workspace member)
+- `claudial-host/` — host daemon (workspace member)
 - `firmware/` — device firmware (excluded; separate toolchain)
 
 Inside `firmware/`:
@@ -132,7 +132,7 @@ Hardware values and the initialization sequence are based on the
 
 ## Host daemon
 
-`clawdmeter-host` polls Claude subscription usage once a minute and publishes
+`claudial-host` polls Claude subscription usage once a minute and publishes
 it to the device over BLE, as one ergot frame per Nordic UART write. It runs on
 a host rather than on the device because every source of these numbers needs a
 credential that rotates, and the device has no way to refresh one it was handed
@@ -146,7 +146,7 @@ request, throwing the completion away and keeping the `anthropic-ratelimit-*`
 response headers. There is no usage endpoint, so the headers are the payload.
 
 ```sh
-cargo run --release -p clawdmeter-host
+cargo run --release -p claudial-host
 ```
 
 **`proxy`** reads the snapshot a [claude-proxy-rs][proxy] instance already
@@ -156,10 +156,10 @@ Code, and inherits the proxy's cache and its web-session fallback for
 Anthropic's aggressively rate-limited usage endpoint.
 
 ```sh
-CLAWDMETER_PROXY_URL=https://aiproxy.example.com \
-CLAWDMETER_PROXY_USERNAME=admin \
-CLAWDMETER_PROXY_PASSWORD=... \
-  cargo run --release -p clawdmeter-host --no-default-features --features proxy
+CLAUDIAL_PROXY_URL=https://aiproxy.example.com \
+CLAUDIAL_PROXY_USERNAME=admin \
+CLAUDIAL_PROXY_PASSWORD=... \
+  cargo run --release -p claudial-host --no-default-features --features proxy
 ```
 
 Cargo features are additive, so `--features proxy` alone leaves `direct`

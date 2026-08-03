@@ -1,11 +1,11 @@
 [package]
 edition      = "2024"
-name         = "waveshare-esp32s3-amoled-2-16"
+name         = "claudial-firmware"
 rust-version = "1.88"
 version      = "0.1.0"
 
 [[bin]]
-name = "waveshare-esp32s3-amoled-2-16"
+name = "claudial-firmware"
 path = "./src/bin/main.rs"
 test = false
 
@@ -55,7 +55,7 @@ bt-hci = "0.8.0"
 
 # Ergot messaging: this device is an edge node with a single BLE interface.
 # Pinned to the same rev as the workspace root — bump both together.
-clawdmeter-icd = { version = "0.1.0", path = "../clawdmeter-icd" }
+claudial-icd = { version = "0.1.0", path = "../claudial-icd" }
 ergot = { git = "https://github.com/okhsunrog/ergot", rev = "8d7db27e030564a048eb16c90080ae6730d14e11", default-features = false, features = [
   "embassy-time",
   "disable-cache-padding",

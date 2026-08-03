@@ -278,13 +278,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "clawdmeter-host"
+name = "claudial-host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "bluest",
  "chrono",
- "clawdmeter-icd",
+ "claudial-icd",
  "dirs",
  "ergot",
  "futures",
@@ -297,7 +297,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "clawdmeter-icd"
+name = "claudial-icd"
 version = "0.1.0"
 dependencies = [
  "ergot",

@@ -1,4 +1,4 @@
-//! BLE NUS transport to the Clawdmeter device.
+//! BLE NUS transport to the Claudial device.
 //!
 //! Each ergot frame maps to one GATT write (host → device) or one notification
 //! (device → host).
@@ -36,7 +36,7 @@ const OUT_BUFFER_SIZE: usize = 4096;
 pub const NET_ID: u16 = 1;
 
 /// Name the firmware advertises.
-pub const DEVICE_NAME: &str = "Clawdmeter";
+pub const DEVICE_NAME: &str = "Claudial";
 
 pub struct BleNusInterface;
 
@@ -59,7 +59,7 @@ pub fn new_stack() -> (Stack, StdQueue) {
     (stack, queue)
 }
 
-/// Find the Clawdmeter: an existing connection first, an advertisement second.
+/// Find the Claudial: an existing connection first, an advertisement second.
 ///
 /// Looking for an existing connection is not an optimisation. When this daemon
 /// exits, BlueZ keeps the ACL link open, so the device stays connected — and a

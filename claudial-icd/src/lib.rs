@@ -1,4 +1,4 @@
-//! Interface Control Document: everything on the wire between the Clawdmeter
+//! Interface Control Document: everything on the wire between the Claudial
 //! firmware and its host daemon.
 //!
 //! Both sides depend on this crate, so the protocol is agreed at compile time

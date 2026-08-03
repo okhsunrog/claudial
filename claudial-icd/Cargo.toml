@@ -1,8 +1,8 @@
 [package]
-name = "clawdmeter-icd"
+name = "claudial-icd"
 version = "0.1.0"
 edition = "2024"
-description = "Wire types shared by the Clawdmeter firmware and its host daemon"
+description = "Wire types shared by the Claudial firmware and its host daemon"
 
 [dependencies]
 ergot = { workspace = true }

@@ -10,7 +10,24 @@
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::vec;
-use clawdmeter_icd::UsageStatus;
+use claudial_firmware::animation::Player;
+use claudial_firmware::animations::ANIMATIONS;
+use claudial_firmware::ble::{ble_task, usage_task};
+use claudial_firmware::board::{DISPLAY_HEIGHT, DISPLAY_SPI_MHZ, DISPLAY_WIDTH};
+use claudial_firmware::co5300::{self, Co5300, brightness_register};
+use claudial_firmware::events::{
+    BrightnessSignal, PmicChannels, PmicEvent, RtcChannels, RtcEvent, SpriteSignal, TouchChannels,
+    TouchState, UiChannels, UiEvent, UsageSignal, next_ui_event,
+};
+use claudial_firmware::frame_stats::{FrameStats, FrameTiming};
+use claudial_firmware::pmic::PowerKey;
+use claudial_firmware::slint_platform::EspPlatform;
+use claudial_firmware::tasks::{SharedI2cBus, pmic_task, rtc_task, touch_task};
+use claudial_firmware::transport::{BLE_MTU, BLE_OUTQ, Stack};
+use claudial_firmware::ui::{
+    self, MainWindow, dispatch_touch_state, push_sprite_frame, update_rtc_display,
+};
+use claudial_icd::UsageStatus;
 use defmt::{error, info};
 use embassy_executor::Spawner;
 use embassy_sync::mutex::Mutex;
@@ -34,23 +51,6 @@ use slint::platform::software_renderer::{
     DirtyRegionAlignment, MinimalSoftwareWindow, RepaintBufferType, Rgb565BigEndianPixel,
 };
 use static_cell::StaticCell;
-use waveshare_esp32s3_amoled_2_16::animation::Player;
-use waveshare_esp32s3_amoled_2_16::animations::ANIMATIONS;
-use waveshare_esp32s3_amoled_2_16::ble::{ble_task, usage_task};
-use waveshare_esp32s3_amoled_2_16::board::{DISPLAY_HEIGHT, DISPLAY_SPI_MHZ, DISPLAY_WIDTH};
-use waveshare_esp32s3_amoled_2_16::co5300::{self, Co5300, brightness_register};
-use waveshare_esp32s3_amoled_2_16::events::{
-    BrightnessSignal, PmicChannels, PmicEvent, RtcChannels, RtcEvent, SpriteSignal, TouchChannels,
-    TouchState, UiChannels, UiEvent, UsageSignal, next_ui_event,
-};
-use waveshare_esp32s3_amoled_2_16::frame_stats::{FrameStats, FrameTiming};
-use waveshare_esp32s3_amoled_2_16::pmic::PowerKey;
-use waveshare_esp32s3_amoled_2_16::slint_platform::EspPlatform;
-use waveshare_esp32s3_amoled_2_16::tasks::{SharedI2cBus, pmic_task, rtc_task, touch_task};
-use waveshare_esp32s3_amoled_2_16::transport::{BLE_MTU, BLE_OUTQ, Stack};
-use waveshare_esp32s3_amoled_2_16::ui::{
-    self, MainWindow, dispatch_touch_state, push_sprite_frame, update_rtc_display,
-};
 
 extern crate alloc;
 

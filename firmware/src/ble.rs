@@ -20,13 +20,13 @@ use trouble_host::prelude::*;
 use crate::ble_nus::{NUS_MAX_PAYLOAD, NusServer};
 use crate::events::UsageSignal;
 use crate::transport::{BLE_OUTQ, Stack};
-use clawdmeter_icd::UsageTopic;
+use claudial_icd::UsageTopic;
 
 const CONNECTIONS_MAX: usize = 1;
 const L2CAP_CHANNELS_MAX: usize = 1;
 
 /// Advertised name. The host daemon looks for this.
-const DEVICE_NAME: &str = "Clawdmeter";
+const DEVICE_NAME: &str = "Claudial";
 
 /// Fixed random static address, so the host sees the same device across
 /// reboots without any bonding involved.
