@@ -127,7 +127,11 @@ async fn main(spawner: Spawner) -> ! {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
+    // Slint's repeated dial elements are allocation-heavy, while the ESP BLE
+    // controller can only allocate from internal RAM. Keep enough internal
+    // heap for both instead of letting the UI consume the radio's headroom.
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 73744);
+    esp_alloc::heap_allocator!(size: 48 * 1024);
     esp_alloc::psram_allocator!(
         peripherals.PSRAM,
         esp_hal::psram,
@@ -310,7 +314,10 @@ async fn main(spawner: Spawner) -> ! {
                 && rendered_frames >= 2
             {
                 application_ready_logged = true;
-                info!("Application ready for touch validation");
+                info!(
+                    "Application ready for touch validation; internal heap free: {} B",
+                    esp_alloc::HEAP.free_caps(esp_alloc::MemoryCapability::Internal.into())
+                );
             }
         }
 
