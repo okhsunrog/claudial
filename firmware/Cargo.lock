@@ -958,7 +958,7 @@ checksum = "0b396d1f76d455557e1218ec8066ae14bba60b4b36ecd55577ba979f5db7ecaa"
 [[package]]
 name = "const-field-offset"
 version = "0.2.1"
-source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#51df9af75b0458057b52386d3f2f03f75787bcc9"
+source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#b4ce46d2c5031792067dd0bb6bc59ca997fe2803"
 dependencies = [
  "const-field-offset-macro",
  "field-offset",
@@ -967,7 +967,7 @@ dependencies = [
 [[package]]
 name = "const-field-offset-macro"
 version = "0.2.1"
-source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#51df9af75b0458057b52386d3f2f03f75787bcc9"
+source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#b4ce46d2c5031792067dd0bb6bc59ca997fe2803"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3192,7 +3192,7 @@ checksum = "48ce8546b993eaf241d69ded33b1be6d205dd9857ec879d9d18bd05d3676e144"
 [[package]]
 name = "i-slint-backend-linuxkms"
 version = "1.18.0"
-source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#51df9af75b0458057b52386d3f2f03f75787bcc9"
+source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#b4ce46d2c5031792067dd0bb6bc59ca997fe2803"
 dependencies = [
  "bytemuck",
  "calloop 0.14.4",
@@ -3210,7 +3210,7 @@ dependencies = [
 [[package]]
 name = "i-slint-backend-selector"
 version = "1.18.0"
-source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#51df9af75b0458057b52386d3f2f03f75787bcc9"
+source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#b4ce46d2c5031792067dd0bb6bc59ca997fe2803"
 dependencies = [
  "cfg-if",
  "cfg_aliases",
@@ -3225,7 +3225,7 @@ dependencies = [
 [[package]]
 name = "i-slint-backend-testing"
 version = "1.18.0"
-source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#51df9af75b0458057b52386d3f2f03f75787bcc9"
+source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#b4ce46d2c5031792067dd0bb6bc59ca997fe2803"
 dependencies = [
  "cfg_aliases",
  "i-slint-common",
@@ -3237,7 +3237,7 @@ dependencies = [
 [[package]]
 name = "i-slint-backend-winit"
 version = "1.18.0"
-source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#51df9af75b0458057b52386d3f2f03f75787bcc9"
+source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#b4ce46d2c5031792067dd0bb6bc59ca997fe2803"
 dependencies = [
  "arboard",
  "block2 0.6.2",
@@ -3278,7 +3278,7 @@ dependencies = [
 [[package]]
 name = "i-slint-common"
 version = "1.18.0"
-source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#51df9af75b0458057b52386d3f2f03f75787bcc9"
+source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#b4ce46d2c5031792067dd0bb6bc59ca997fe2803"
 dependencies = [
  "derive_more",
  "fontique",
@@ -3294,7 +3294,7 @@ dependencies = [
 [[package]]
 name = "i-slint-compiler"
 version = "1.18.0"
-source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#51df9af75b0458057b52386d3f2f03f75787bcc9"
+source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#b4ce46d2c5031792067dd0bb6bc59ca997fe2803"
 dependencies = [
  "annotate-snippets",
  "by_address",
@@ -3302,6 +3302,7 @@ dependencies = [
  "derive_more",
  "i-slint-common",
  "icu_normalizer",
+ "icu_properties",
  "image",
  "itertools 0.15.0",
  "linked_hash_set",
@@ -3326,7 +3327,7 @@ dependencies = [
 [[package]]
 name = "i-slint-core"
 version = "1.18.0"
-source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#51df9af75b0458057b52386d3f2f03f75787bcc9"
+source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#b4ce46d2c5031792067dd0bb6bc59ca997fe2803"
 dependencies = [
  "auto_enums",
  "bitflags 2.13.1",
@@ -3377,7 +3378,7 @@ dependencies = [
 [[package]]
 name = "i-slint-core-macros"
 version = "1.18.0"
-source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#51df9af75b0458057b52386d3f2f03f75787bcc9"
+source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#b4ce46d2c5031792067dd0bb6bc59ca997fe2803"
 dependencies = [
  "quote",
  "serde_json",
@@ -3387,7 +3388,7 @@ dependencies = [
 [[package]]
 name = "i-slint-renderer-skia"
 version = "1.18.0"
-source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#51df9af75b0458057b52386d3f2f03f75787bcc9"
+source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#b4ce46d2c5031792067dd0bb6bc59ca997fe2803"
 dependencies = [
  "bytemuck",
  "cfg-if",
@@ -3423,7 +3424,7 @@ dependencies = [
 [[package]]
 name = "i-slint-renderer-software"
 version = "1.18.0"
-source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#51df9af75b0458057b52386d3f2f03f75787bcc9"
+source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#b4ce46d2c5031792067dd0bb6bc59ca997fe2803"
 dependencies = [
  "bytemuck",
  "clru",
@@ -6036,7 +6037,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 [[package]]
 name = "slint"
 version = "1.18.0"
-source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#51df9af75b0458057b52386d3f2f03f75787bcc9"
+source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#b4ce46d2c5031792067dd0bb6bc59ca997fe2803"
 dependencies = [
  "const-field-offset",
  "i-slint-backend-selector",
@@ -6055,7 +6056,7 @@ dependencies = [
 [[package]]
 name = "slint-build"
 version = "1.18.0"
-source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#51df9af75b0458057b52386d3f2f03f75787bcc9"
+source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#b4ce46d2c5031792067dd0bb6bc59ca997fe2803"
 dependencies = [
  "derive_more",
  "fontique",
@@ -6067,7 +6068,7 @@ dependencies = [
 [[package]]
 name = "slint-macros"
 version = "1.18.0"
-source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#51df9af75b0458057b52386d3f2f03f75787bcc9"
+source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#b4ce46d2c5031792067dd0bb6bc59ca997fe2803"
 dependencies = [
  "i-slint-compiler",
  "proc-macro2",
@@ -7034,7 +7035,7 @@ checksum = "6a02e4885ed3bc0f2de90ea6dd45ebcbb66dacffe03547fadbb0eeae2770887d"
 [[package]]
 name = "vtable"
 version = "0.5.0"
-source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#51df9af75b0458057b52386d3f2f03f75787bcc9"
+source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#b4ce46d2c5031792067dd0bb6bc59ca997fe2803"
 dependencies = [
  "const-field-offset",
  "portable-atomic",
@@ -7045,7 +7046,7 @@ dependencies = [
 [[package]]
 name = "vtable-macro"
 version = "0.5.0"
-source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#51df9af75b0458057b52386d3f2f03f75787bcc9"
+source = "git+https://github.com/okhsunrog/slint.git?branch=dirty-region-alignment#b4ce46d2c5031792067dd0bb6bc59ca997fe2803"
 dependencies = [
  "proc-macro2",
  "quote",
