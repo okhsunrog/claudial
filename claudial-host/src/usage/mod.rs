@@ -1,33 +1,49 @@
-//! Where the usage numbers come from.
+//! Runtime-selectable sources for Claude subscription usage.
 //!
-//! Two backends, selected at compile time by feature:
-//!
-//! - `direct` (default) — talk to `api.anthropic.com` with Claude Code's own
-//!   OAuth token and read the `anthropic-ratelimit-*` response headers. No
-//!   extra infrastructure, but it needs Claude Code logged in on this machine
-//!   and it spends a (tiny) API request per poll.
-//! - `proxy` — read the snapshot [claude-proxy-rs] already keeps, over its
-//!   `/admin/oauth/usage` endpoint. Costs nothing upstream, works on a machine
-//!   that has never run Claude Code, and reuses the proxy's cache and its
-//!   web-session fallback for the aggressively rate-limited usage endpoint.
-//!
-//! Cargo features are additive, so `--features proxy` leaves the default
-//! `direct` enabled too. Rather than fail that build, `proxy` simply wins.
+//! `claude-code` is the default: it authenticates with Claude Code's rotating
+//! OAuth token and reads usage from the rate-limit headers of a minimal API
+//! probe. `claude-proxy` reads the snapshot already cached by
+//! [claude-proxy-rs], avoiding another upstream request.
 //!
 //! [claude-proxy-rs]: https://github.com/okhsunrog/claude-proxy-rs
 
-#[cfg(all(feature = "direct", not(feature = "proxy")))]
-mod direct;
-#[cfg(feature = "proxy")]
-mod proxy;
+mod claude_code;
+mod claude_proxy;
+mod proxy_credentials;
 
-#[cfg(all(feature = "direct", not(feature = "proxy")))]
-pub use direct::UsageClient;
-#[cfg(feature = "proxy")]
-pub use proxy::UsageClient;
+use anyhow::Result;
+use clap::ValueEnum;
+use claudial_icd::UsageSnapshot;
 
-#[cfg(not(any(feature = "direct", feature = "proxy")))]
-compile_error!("enable one of the `direct` or `proxy` features");
+#[derive(Clone, Copy, Debug, Default, ValueEnum)]
+pub enum UsageSource {
+    /// Probe Anthropic using Claude Code's local OAuth credential.
+    #[default]
+    ClaudeCode,
+    /// Read the usage snapshot cached by claude-proxy-rs.
+    ClaudeProxy,
+}
+
+pub enum UsageClient {
+    ClaudeCode(claude_code::UsageClient),
+    ClaudeProxy(claude_proxy::UsageClient),
+}
+
+impl UsageClient {
+    pub fn new(source: UsageSource) -> Result<Self> {
+        match source {
+            UsageSource::ClaudeCode => Ok(Self::ClaudeCode(claude_code::UsageClient::new()?)),
+            UsageSource::ClaudeProxy => Ok(Self::ClaudeProxy(claude_proxy::UsageClient::new()?)),
+        }
+    }
+
+    pub async fn poll(&self) -> Result<UsageSnapshot> {
+        match self {
+            Self::ClaudeCode(client) => client.poll().await,
+            Self::ClaudeProxy(client) => client.poll().await,
+        }
+    }
+}
 
 /// Round a percentage into the byte the device displays.
 fn clamp_percent(percent: f64) -> u8 {

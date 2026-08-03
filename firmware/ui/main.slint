@@ -22,6 +22,16 @@ global Palette {
     out property <color> panel-line: #322b27;
 }
 
+// The panel is physically rounded, but Slint's safe-area insets are linear
+// edge offsets rather than a curved mask. Keep the full-bleed dial and place
+// interactive/status controls using one calibrated geometry token set.
+global ScreenGeometry {
+    out property <length> corner-extent: 96px;
+    out property <length> edge-margin: 20px;
+    out property <length> top-controls-y: 12px;
+    out property <length> corner-touch-margin: 16px;
+}
+
 component DotRing inherits Rectangle {
     in property <int> count: 60;
     in property <length> radius: 196px;
@@ -224,7 +234,7 @@ export component MainWindow inherits Window {
     in property <int> usage-weekly: 0;
     in property <string> usage-session-reset: "--";
     in property <string> usage-weekly-reset: "--";
-    in property <string> pace-summary: "MEASURING PACE";
+    in property <string> pace-summary: "HOST OFFLINE";
     in property <bool> pace-warning: false;
 
     // The corner indicators describe user-visible state. BLE transport state
@@ -302,8 +312,8 @@ export component MainWindow inherits Window {
     }
 
     Rectangle {
-        x: 20px;
-        y: 8px;
+        x: ScreenGeometry.edge-margin;
+        y: ScreenGeometry.top-controls-y;
         width: root.usb-connected ? 104px : 78px;
         height: 40px;
         border-radius: 20px;
@@ -332,8 +342,8 @@ export component MainWindow inherits Window {
     }
 
     Rectangle {
-        x: 356px;
-        y: 8px;
+        x: root.width - ScreenGeometry.edge-margin - self.width;
+        y: ScreenGeometry.top-controls-y;
         width: 104px;
         height: 40px;
         border-radius: 20px;
@@ -439,8 +449,8 @@ export component MainWindow inherits Window {
     }
 
     settings-touch := TouchArea {
-        x: 402px;
-        y: 402px;
+        x: root.width - ScreenGeometry.corner-touch-margin - self.width;
+        y: root.height - ScreenGeometry.corner-touch-margin - self.height;
         width: 66px;
         height: 66px;
         clicked => {
@@ -661,7 +671,7 @@ export component MainWindow inherits Window {
             }
 
             back-touch := TouchArea {
-                x: 12px; y: 8px; width: 88px; height: 52px;
+                x: ScreenGeometry.edge-margin; y: ScreenGeometry.top-controls-y; width: 88px; height: 52px;
                 clicked => { root.close-settings(); }
                 Rectangle {
                     x: 0px; y: 6px; width: 76px; height: 40px;
@@ -683,7 +693,7 @@ export component MainWindow inherits Window {
             }
 
             Text {
-                x: 364px; y: 0px; width: 100px; height: 68px;
+                x: root.width - ScreenGeometry.edge-margin - 100px; y: 0px; width: 100px; height: 68px;
                 text: root.settings-storage-status;
                 color: root.settings-storage-status == "save failed" ? Palette.danger : Palette.dim;
                 font-size: 11px; horizontal-alignment: right; vertical-alignment: center;

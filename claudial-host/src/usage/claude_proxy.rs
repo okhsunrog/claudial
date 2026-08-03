@@ -19,52 +19,42 @@ use serde::Deserialize;
 use tracing::{debug, warn};
 
 use super::clamp_percent;
-
-const URL_VAR: &str = "CLAUDIAL_PROXY_URL";
-const USERNAME_VAR: &str = "CLAUDIAL_PROXY_USERNAME";
-const PASSWORD_VAR: &str = "CLAUDIAL_PROXY_PASSWORD";
+use super::proxy_credentials;
 
 pub struct UsageClient {
     http: reqwest::Client,
-    url: String,
-    username: String,
-    password: String,
 }
 
 impl UsageClient {
-    /// Read the proxy's address and admin credentials from the environment.
-    ///
-    /// Failing here rather than on the first poll means a missing variable is
-    /// reported at startup, before the daemon settles into its retry loop.
     pub fn new() -> Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(20))
             .build()
             .context("building HTTP client")?;
-
-        Ok(Self {
-            // Accept a base URL with or without a trailing `/admin`, since
-            // that is the address a user has bookmarked for the admin UI.
-            url: env(URL_VAR)?
-                .trim_end_matches('/')
-                .trim_end_matches("/admin")
-                .to_owned(),
-            username: env(USERNAME_VAR)?,
-            password: env(PASSWORD_VAR)?,
-            http,
-        })
+        Ok(Self { http })
     }
 
     pub async fn poll(&self) -> Result<UsageSnapshot> {
+        // Load on every poll so a service started before KWallet is unlocked
+        // recovers by itself, and credentials changed in the applet take
+        // effect without restarting the daemon.
+        let credentials = proxy_credentials::load()?;
+
         // Deliberately not `?force=true`: the plain endpoint honours the
         // proxy's freshness throttle, which exists because Anthropic rate
         // limits the upstream hard. Forcing it once a minute would defeat the
         // cache this backend exists to reuse.
-        let url = format!("{}/admin/oauth/usage", self.url);
+        // Accept a base URL with or without a trailing `/admin`, since that is
+        // the address a user is likely to copy from the browser.
+        let base = credentials
+            .url
+            .trim_end_matches('/')
+            .trim_end_matches("/admin");
+        let url = format!("{base}/admin/oauth/usage");
         let response = self
             .http
             .get(&url)
-            .basic_auth(&self.username, Some(&self.password))
+            .basic_auth(&credentials.username, Some(&credentials.password))
             .send()
             .await
             .with_context(|| format!("calling {url}"))?;
@@ -87,10 +77,6 @@ impl UsageClient {
     }
 }
 
-fn env(name: &str) -> Result<String> {
-    std::env::var(name).map_err(|_| anyhow!("{name} is not set"))
-}
-
 /// The fields of the proxy's `SubscriptionUsageResponse` this needs.
 ///
 /// Serde ignores the rest — per-model limits, extra-usage credits, cache
@@ -107,8 +93,8 @@ struct SubscriptionUsage {
 
 #[derive(Deserialize)]
 struct UsageLimit {
-    /// Whole percent, 0..100 — unlike the rate-limit headers the `direct`
-    /// backend reads, which are 0..1 fractions.
+    /// Whole percent, 0..100 — unlike the rate-limit headers the `claude-code`
+    /// source reads, which are 0..1 fractions.
     utilization: Option<f64>,
     /// RFC 3339 timestamp.
     resets_at: Option<String>,

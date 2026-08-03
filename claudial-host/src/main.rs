@@ -1,11 +1,10 @@
 //! Host daemon: pushes Claude usage to a Claudial over BLE.
 //!
-//! Where the numbers come from is a compile-time choice between two backends —
-//! see [`usage`]. Either way it runs on a host rather than on the device,
+//! The usage source is selected at runtime — see [`usage`]. Either way it runs
+//! on a host rather than on the device,
 //! because both sources need a credential that rotates and the device has no
 //! way to refresh one it was handed once.
 
-#[cfg(all(feature = "direct", not(feature = "proxy")))]
 mod credentials;
 mod transport;
 mod usage;
@@ -14,16 +13,30 @@ use std::time::Duration;
 
 use anyhow::Result;
 use chrono::{Local, Utc};
+use clap::Parser;
 use claudial_icd::{ClockSync, ClockSyncTopic, UsageTopic};
 use ergot::interface_manager::{InterfaceState, Profile};
 use tracing::{info, warn};
 
-use crate::usage::UsageClient;
+use crate::usage::{UsageClient, UsageSource};
+
+#[derive(Parser)]
+#[command(version, about)]
+struct Args {
+    /// Where subscription usage is read from.
+    #[arg(
+        long,
+        value_enum,
+        env = "CLAUDIAL_USAGE_SOURCE",
+        default_value = "claude-code"
+    )]
+    usage_source: UsageSource,
+}
 
 /// How often usage is polled and published. This matches the upstream
-/// project's cadence rather than going faster: the `direct` backend spends a
-/// (near-free) API request per poll, and the `proxy` backend would just be
-/// re-reading a cache that refreshes on its own schedule.
+/// project's cadence rather than going faster: `claude-code` spends a small
+/// API request per poll, while `claude-proxy` would just reread a cache that
+/// refreshes on its own schedule.
 const POLL_INTERVAL: Duration = Duration::from_secs(60);
 const CLOCK_SYNC_INTERVAL: i64 = 60 * 60;
 const SCAN_TIMEOUT: Duration = Duration::from_secs(30);
@@ -31,6 +44,7 @@ const RETRY_DELAY: Duration = Duration::from_secs(5);
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args = Args::parse();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -39,7 +53,8 @@ async fn main() -> Result<()> {
         .init();
 
     let (stack, queue) = transport::new_stack();
-    let usage = UsageClient::new()?;
+    let usage = UsageClient::new(args.usage_source)?;
+    info!(source = ?args.usage_source, "usage source selected");
     let mut workers = Vec::new();
 
     loop {

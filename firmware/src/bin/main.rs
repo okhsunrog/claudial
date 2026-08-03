@@ -72,6 +72,8 @@ static USAGE: UsageSignal = UsageSignal::new();
 
 /// Two missed host polls make the displayed data stale.
 const DATA_FRESHNESS_TIMEOUT: Duration = Duration::from_secs(150);
+/// Whole-percent usage staying unchanged this long is worth saying explicitly.
+const USAGE_UNCHANGED_SECONDS: u32 = 5 * 60;
 
 /// Render a compact reset countdown, or `--` when the host has nothing.
 fn format_reset(minutes: u16) -> alloc::string::String {
@@ -95,7 +97,51 @@ fn update_data_state(ui: &MainWindow, ble_connected: bool, last_usage_at: Option
     );
 }
 
-fn update_pace(ui: &MainWindow, pace: &Pace, snapshot: UsageSnapshot, session_reset_mins: u16) {
+fn format_usage_age(received: Instant) -> alloc::string::String {
+    let seconds = received.elapsed().as_secs();
+    if seconds < 60 {
+        return "JUST NOW".into();
+    }
+    if seconds < 60 * 60 {
+        return format!("{}M AGO", seconds / 60);
+    }
+    if seconds < 24 * 60 * 60 {
+        return format!("{}H AGO", seconds / (60 * 60));
+    }
+    format!("{}D AGO", seconds / (24 * 60 * 60))
+}
+
+fn update_pace(
+    ui: &MainWindow,
+    pace: &Pace,
+    snapshot: UsageSnapshot,
+    session_reset_mins: u16,
+    ble_connected: bool,
+    last_usage_at: Option<Instant>,
+) {
+    if !ble_connected {
+        ui.set_pace_summary(
+            last_usage_at
+                .map(|received| format!("HOST OFFLINE · {}", format_usage_age(received)))
+                .unwrap_or_else(|| "HOST OFFLINE".into())
+                .into(),
+        );
+        ui.set_pace_warning(false);
+        return;
+    }
+
+    let Some(last_usage_at) = last_usage_at else {
+        ui.set_pace_summary("WAITING FOR USAGE".into());
+        ui.set_pace_warning(false);
+        return;
+    };
+
+    if last_usage_at.elapsed() >= DATA_FRESHNESS_TIMEOUT {
+        ui.set_pace_summary(format!("USAGE STALE · {}", format_usage_age(last_usage_at)).into());
+        ui.set_pace_warning(false);
+        return;
+    }
+
     if snapshot.status == UsageStatus::Limited || snapshot.session_pct >= 100 {
         ui.set_pace_summary("LIMIT REACHED".into());
         ui.set_pace_warning(true);
@@ -103,12 +149,20 @@ fn update_pace(ui: &MainWindow, pace: &Pace, snapshot: UsageSnapshot, session_re
     }
 
     let Some(rate) = pace.rate_per_hour() else {
-        ui.set_pace_summary("MEASURING PACE".into());
+        let minutes = pace.readiness_remaining_seconds().div_ceil(60);
+        ui.set_pace_summary(format!("PACE READY IN {minutes}M").into());
         ui.set_pace_warning(false);
         return;
     };
+
+    let unchanged_seconds = pace.unchanged_seconds();
+    if unchanged_seconds >= USAGE_UNCHANGED_SECONDS {
+        ui.set_pace_summary(format!("USAGE UNCHANGED · {}M", unchanged_seconds / 60).into());
+        ui.set_pace_warning(false);
+        return;
+    }
     if rate == 0 {
-        ui.set_pace_summary("PACE · QUIET".into());
+        ui.set_pace_summary("USAGE UNCHANGED".into());
         ui.set_pace_warning(false);
         return;
     }
@@ -137,6 +191,8 @@ fn update_time_dependent_usage(
     pace: &Pace,
     usage: UsageSnapshot,
     rtc: Option<RtcSnapshot>,
+    ble_connected: bool,
+    last_usage_at: Option<Instant>,
 ) {
     let now = rtc.and_then(RtcSnapshot::unix_timestamp);
     let session_reset_mins = now
@@ -146,9 +202,28 @@ fn update_time_dependent_usage(
         .map(|now| minutes_until(usage.weekly_reset_at, now))
         .unwrap_or(0);
 
-    update_pace(ui, pace, usage, session_reset_mins);
+    update_pace(
+        ui,
+        pace,
+        usage,
+        session_reset_mins,
+        ble_connected,
+        last_usage_at,
+    );
     ui.set_usage_session_reset(format_reset(session_reset_mins).into());
     ui.set_usage_weekly_reset(format_reset(weekly_reset_mins).into());
+}
+
+fn update_usage_state(
+    ui: &MainWindow,
+    pace: &Pace,
+    usage: UsageSnapshot,
+    rtc: Option<RtcSnapshot>,
+    ble_connected: bool,
+    last_usage_at: Option<Instant>,
+) {
+    update_data_state(ui, ble_connected, last_usage_at);
+    update_time_dependent_usage(ui, pace, usage, rtc, ble_connected, last_usage_at);
 }
 
 fn next_idle_deadline(settings: DisplaySettings, usb_connected: bool) -> Option<Instant> {
@@ -607,20 +682,41 @@ async fn main(spawner: Spawner) -> ! {
                     rtc_ready = true;
                     latest_rtc = Some(snapshot);
                     update_clock(&ui, snapshot);
-                    update_time_dependent_usage(&ui, &pace, latest_usage, latest_rtc);
+                    update_usage_state(
+                        &ui,
+                        &pace,
+                        latest_usage,
+                        latest_rtc,
+                        ble_connected,
+                        last_usage_at,
+                    );
                 }
                 RtcEvent::SyncFailed => {
                     latest_rtc = None;
                     ui.set_clock("--:--".into());
                     ui.set_rtc_status("sync failed".into());
-                    update_time_dependent_usage(&ui, &pace, latest_usage, latest_rtc);
+                    update_usage_state(
+                        &ui,
+                        &pace,
+                        latest_usage,
+                        latest_rtc,
+                        ble_connected,
+                        last_usage_at,
+                    );
                 }
                 RtcEvent::Error => {
                     rtc_ready = true;
                     latest_rtc = None;
                     ui.set_clock("--:--".into());
                     ui.set_rtc_status("unavailable".into());
-                    update_time_dependent_usage(&ui, &pace, latest_usage, latest_rtc);
+                    update_usage_state(
+                        &ui,
+                        &pace,
+                        latest_usage,
+                        latest_rtc,
+                        ble_connected,
+                        last_usage_at,
+                    );
                 }
             },
             UiEvent::Settings(action) => {
@@ -733,7 +829,14 @@ async fn main(spawner: Spawner) -> ! {
                         ui.set_ble_status("error".into());
                     }
                 }
-                update_data_state(&ui, ble_connected, last_usage_at);
+                update_usage_state(
+                    &ui,
+                    &pace,
+                    latest_usage,
+                    latest_rtc,
+                    ble_connected,
+                    last_usage_at,
+                );
             }
             UiEvent::Maintenance => {
                 let elapsed_seconds = started_at.elapsed().as_secs();
@@ -742,7 +845,14 @@ async fn main(spawner: Spawner) -> ! {
                     displayed_minute = elapsed_minutes;
                     ui.set_uptime(format!("{elapsed_minutes} min").into());
                 }
-                update_data_state(&ui, ble_connected, last_usage_at);
+                update_usage_state(
+                    &ui,
+                    &pace,
+                    latest_usage,
+                    latest_rtc,
+                    ble_connected,
+                    last_usage_at,
+                );
             }
             UiEvent::Idle => {
                 if display_settings.should_dim(usb_connected)
@@ -770,8 +880,14 @@ async fn main(spawner: Spawner) -> ! {
                 pace.record(snapshot.session_pct, elapsed_seconds);
                 latest_usage = snapshot;
                 last_usage_at = Some(Instant::now());
-                update_data_state(&ui, ble_connected, last_usage_at);
-                update_time_dependent_usage(&ui, &pace, latest_usage, latest_rtc);
+                update_usage_state(
+                    &ui,
+                    &pace,
+                    latest_usage,
+                    latest_rtc,
+                    ble_connected,
+                    last_usage_at,
+                );
                 ui.set_usage_known(true);
                 ui.set_usage_session(i32::from(snapshot.session_pct));
                 ui.set_usage_weekly(i32::from(snapshot.weekly_pct));

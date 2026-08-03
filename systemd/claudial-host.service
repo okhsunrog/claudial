@@ -1,0 +1,24 @@
+[Unit]
+Description=Claudial host daemon
+Documentation=https://github.com/okhsunrog/claudial
+After=graphical-session.target
+
+[Service]
+Type=exec
+ExecStart=%h/.local/bin/claudial-host
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=10s
+Environment=RUST_LOG=claudial_host=info
+
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=default.target

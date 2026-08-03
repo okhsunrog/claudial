@@ -105,6 +105,44 @@ impl Pace {
         Some(rounded.min(u64::from(u16::MAX)) as u16)
     }
 
+    /// Seconds still needed before the estimator can report a useful rate.
+    pub fn readiness_remaining_seconds(&self) -> u32 {
+        MINIMUM_COVERAGE_SECONDS.saturating_sub(self.covered_seconds())
+    }
+
+    /// Continuous time since the last observed whole-percent increase.
+    ///
+    /// The source only reports whole percentages, so this deliberately means
+    /// "unchanged", not "no activity". Small usage may be hidden by rounding.
+    pub fn unchanged_seconds(&self) -> u32 {
+        let mut unchanged = 0_u32;
+
+        for n in 0..self.len {
+            if unchanged == WINDOW_SECONDS {
+                break;
+            }
+
+            let segment = self.recent(n);
+            if segment.delta > 0 {
+                break;
+            }
+            unchanged += segment.elapsed_seconds.min(WINDOW_SECONDS - unchanged);
+        }
+
+        unchanged
+    }
+
+    fn covered_seconds(&self) -> u32 {
+        let mut covered = 0_u32;
+        for n in 0..self.len {
+            if covered == WINDOW_SECONDS {
+                break;
+            }
+            covered += self.recent(n).elapsed_seconds.min(WINDOW_SECONDS - covered);
+        }
+        covered
+    }
+
     fn recent(&self, n: usize) -> Segment {
         self.segments[(self.head + SEGMENTS - 1 - n) % SEGMENTS]
     }
@@ -172,5 +210,42 @@ mod tests {
         }
 
         assert_eq!(pace.rate_per_hour(), Some(60));
+    }
+
+    #[test]
+    fn readiness_counts_down_with_observed_time() {
+        let mut pace = Pace::new();
+        pace.record(10, 0);
+        pace.record(10, 60);
+        pace.record(10, 120);
+
+        assert_eq!(pace.readiness_remaining_seconds(), 120);
+
+        pace.record(10, 120);
+        assert_eq!(pace.readiness_remaining_seconds(), 0);
+        assert_eq!(pace.rate_per_hour(), Some(0));
+    }
+
+    #[test]
+    fn unchanged_time_stops_at_the_last_increase() {
+        let mut pace = Pace::new();
+        pace.record(10, 0);
+        pace.record(11, 60);
+        pace.record(11, 60);
+        pace.record(11, 120);
+
+        assert_eq!(pace.unchanged_seconds(), 180);
+    }
+
+    #[test]
+    fn long_gap_resets_readiness_and_unchanged_time() {
+        let mut pace = Pace::new();
+        pace.record(10, 0);
+        pace.record(10, 60);
+        pace.record(10, 60);
+        pace.record(12, MAXIMUM_SAMPLE_GAP_SECONDS + 1);
+
+        assert_eq!(pace.readiness_remaining_seconds(), MINIMUM_COVERAGE_SECONDS);
+        assert_eq!(pace.unchanged_seconds(), 0);
     }
 }

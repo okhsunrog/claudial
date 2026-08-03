@@ -44,29 +44,54 @@ cargo run --release
 
 ## Host daemon
 
-The default `direct` backend reads Claude Code's OAuth credentials from
-`~/.claude/.credentials.json` and obtains the current rate-limit headers:
+The default source uses Claude Code's rotating OAuth credential and obtains the
+current rate-limit headers from a minimal Anthropic request:
 
 ```sh
 cargo run --release -p claudial-host
 ```
 
-The optional `proxy` backend reads the cached snapshot from a
-[claude-proxy-rs][proxy] instance:
+To avoid another upstream request, select the snapshot already cached by
+[claude-proxy-rs][proxy]:
 
 ```sh
-CLAUDIAL_PROXY_URL=https://aiproxy.example.com \
-CLAUDIAL_PROXY_USERNAME=admin \
-CLAUDIAL_PROXY_PASSWORD=... \
-  cargo run --release -p claudial-host \
-    --no-default-features --features proxy
+cargo run --release -p claudial-host -- \
+  --usage-source claude-proxy
 ```
+
+On Plasma, this mode reuses the `url`, `username`, and `password` entries saved
+by `claude-plasmoid` in KWallet. As a portable fallback, set all three of
+`CLAUDIAL_PROXY_URL`, `CLAUDIAL_PROXY_USERNAME`, and
+`CLAUDIAL_PROXY_PASSWORD`. Credentials remain on the host.
 
 The daemon scans for a BLE peripheral named `Claudial`, connects to its Nordic
 UART Service, and publishes a fresh snapshot once a minute. It also synchronizes
 the board's battery-backed RTC, which keeps the local clock and reset countdowns
-running between updates. Credentials remain on the host; they are never sent to
-or stored on the device.
+running between updates.
+
+### User service
+
+```sh
+cargo build --release -p claudial-host
+install -Dm755 target/release/claudial-host ~/.local/bin/claudial-host
+install -Dm644 systemd/claudial-host.service \
+  ~/.config/systemd/user/claudial-host.service
+systemctl --user daemon-reload
+systemctl --user enable --now claudial-host.service
+```
+
+The unit uses the default `claude-code` source. To select KWallet-backed
+`claude-proxy` for the service, save this as
+`~/.config/systemd/user/claudial-host.service.d/usage-source.conf`:
+
+```ini
+[Service]
+Environment=CLAUDIAL_USAGE_SOURCE=claude-proxy
+```
+
+Reload and restart with `systemctl --user daemon-reload` and
+`systemctl --user restart claudial-host.service`. Follow logs with
+`journalctl --user -u claudial-host.service -f`.
 
 [board-docs]: https://docs.waveshare.com/ESP32-S3-Touch-AMOLED-2.16
 [clawdmeter]: https://github.com/HermannBjorgvin/Clawdmeter

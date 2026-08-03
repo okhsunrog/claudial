@@ -1,4 +1,4 @@
-//! Reading Claude Code usage off the API's rate-limit headers.
+//! Reading Claude usage from an Anthropic probe authenticated by Claude Code.
 //!
 //! There is no usage endpoint. The numbers ride on the `anthropic-ratelimit-*`
 //! response headers of an ordinary request, so this makes the smallest one it
