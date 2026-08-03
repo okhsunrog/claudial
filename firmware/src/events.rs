@@ -160,9 +160,9 @@ pub struct UiChannels {
 /// `Timer::after` does not: it starts counting again from zero.
 ///
 /// So any deadline that has to survive cancellation is passed in as an
-/// absolute [`Instant`]. The Slint animation deadline is the one exception
-/// that may stay relative, because the caller recomputes it from Slint's own
-/// schedule immediately before every call.
+/// absolute [`Instant`]. Slint wake-ups are the exception that may stay
+/// relative: the caller recomputes them immediately before every call and
+/// passes a short yield while property animations are active.
 pub async fn next_ui_event(
     channels: &UiChannels,
     maintenance: &mut Ticker,

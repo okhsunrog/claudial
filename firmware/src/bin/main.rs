@@ -512,7 +512,15 @@ async fn main(spawner: Spawner) -> ! {
 
         // Sleep until a peripheral reports in, periodic maintenance is due,
         // or an animation is due for its next step. Nothing is polled here.
-        let animation = slint::platform::duration_until_next_timer_update();
+        // Slint timers and property animations have separate wake-up rules:
+        // duration_until_next_timer_update() deliberately excludes active
+        // animations. Briefly yield instead of sleeping while one is running
+        // so the renderer advances every frame and peripheral tasks get time.
+        let animation = if slint_window.has_active_animations() {
+            Some(core::time::Duration::from_millis(1))
+        } else {
+            slint::platform::duration_until_next_timer_update()
+        };
         // Keep the settings page readable while the user is inspecting it.
         // Closing it starts a fresh idle interval.
         let active_idle_deadline = (display_on && !ui.get_show_settings())
