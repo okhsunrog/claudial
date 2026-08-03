@@ -293,10 +293,21 @@ async fn main(spawner: Spawner) -> ! {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
-    // The line renderer keeps the complete UI and BLE stack in internal RAM;
-    // no framebuffer or general-purpose allocator is backed by external PSRAM.
+    // BLE can only allocate from internal RAM. Slint normally fits there too,
+    // but opening allocation-heavy overlays needs a larger contiguous block
+    // after the radio has fragmented the internal heaps. Keep PSRAM as the
+    // general allocator's fallback even though render_by_line no longer needs
+    // a full framebuffer.
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 73744);
     esp_alloc::heap_allocator!(size: 48 * 1024);
+    esp_alloc::psram_allocator!(
+        peripherals.PSRAM,
+        esp_hal::psram,
+        esp_hal::psram::PsramConfig {
+            mode: esp_hal::psram::PsramMode::OctalSpi,
+            ..Default::default()
+        }
+    );
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let sw_interrupt =
