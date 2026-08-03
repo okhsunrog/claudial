@@ -49,35 +49,50 @@ component BatteryIcon inherits Rectangle {
     in property <bool> charging: false;
     in property <bool> known: false;
 
-    property <color> tint: !root.known ? Palette.dim : root.charging ? Palette.ok : root.percent <= 15 ? Palette.danger : Palette.mid;
+    property <color> fill: root.charging ? Palette.ok : root.percent <= 15 ? Palette.danger : root.percent <= 30 ? Palette.weekly : Palette.ink;
 
-    width: 26px;
-    height: 14px;
+    width: 62px;
+    height: 26px;
 
     Rectangle {
-        width: 22px;
+        x: 0px;
+        y: 0px;
+        width: 58px;
         height: 100%;
-        border-radius: 4px;
-        border-width: 1.5px;
-        border-color: root.tint;
+        border-radius: 9px;
+        background: root.known ? Palette.mid : Palette.track;
+        clip: true;
 
         Rectangle {
-            x: 2.5px;
-            y: 2.5px;
-            width: root.known ? Math.max(0, Math.min(100, root.percent)) * 17px / 100 : 0px;
-            height: parent.height - 5px;
-            border-radius: 2px;
-            background: root.tint;
+            x: 0px;
+            y: 0px;
+            width: root.known ? Math.max(0, Math.min(100, root.percent)) * parent.width / 100 : 0px;
+            height: 100%;
+            border-radius: 9px;
+            background: root.fill;
+        }
+
+        Text {
+            x: 0px;
+            y: 0px;
+            width: 100%;
+            height: 100%;
+            text: root.known ? root.percent : "--";
+            color: root.known ? Palette.bg : Palette.mid;
+            font-size: 15px;
+            font-weight: 800;
+            horizontal-alignment: center;
+            vertical-alignment: center;
         }
     }
 
     Rectangle {
-        x: 22px;
-        y: 4px;
-        width: 3px;
-        height: 6px;
-        border-radius: 1px;
-        background: root.tint;
+        x: 58px;
+        y: 8px;
+        width: 4px;
+        height: 10px;
+        border-radius: 2px;
+        background: root.known ? Palette.mid : Palette.track;
     }
 }
 
@@ -154,6 +169,7 @@ export component MainWindow inherits Window {
     in property <bool> battery-known: false;
     in property <int> battery-percent: 0;
     in property <bool> battery-charging: false;
+    in property <bool> usb-connected: false;
 
     // Diagnostics only.
     in property <string> clock: "--:--";
@@ -208,55 +224,66 @@ export component MainWindow inherits Window {
     // The visible indicators are compact, but the targets are large enough
     // for a finger. Both lead to the same diagnostics overlay.
     battery-touch := TouchArea {
-        x: 20px;
-        y: 16px;
+        x: 12px;
+        y: 0px;
         width: 128px;
-        height: 58px;
+        height: 56px;
         clicked => {
             root.show-diagnostics = true;
         }
 
         Rectangle {
-            border-radius: 16px;
-            background: battery-touch.pressed ? Palette.panel : #00000000;
+            x: 8px;
+            y: 8px;
+            width: root.usb-connected ? 104px : 78px;
+            height: 40px;
+            border-radius: 20px;
+            background: battery-touch.pressed ? Palette.track : #171110d0;
+            border-width: 1px;
+            border-color: Palette.panel-line;
+            opacity: battery-touch.pressed ? 0.75 : 1;
 
             BatteryIcon {
-                x: 12px;
-                y: 22px;
+                x: 8px;
+                y: 7px;
                 percent: root.battery-percent;
                 charging: root.battery-charging;
                 known: root.battery-known;
             }
 
-            Text {
-                x: 46px;
-                width: 72px;
-                height: 100%;
-                text: root.battery-known ? root.battery-percent + "%" : "--";
-                color: root.battery-known && root.battery-percent <= 15 ? Palette.danger : Palette.mid;
-                font-size: 15px;
-                font-weight: 600;
-                vertical-alignment: center;
+            if root.usb-connected: Image {
+                x: 80px;
+                y: 8px;
+                width: 12px;
+                height: 24px;
+                source: @image-url("icons/lightning.svg");
+                colorize: Palette.ok;
             }
         }
     }
 
     data-touch := TouchArea {
-        x: 332px;
-        y: 16px;
+        x: 342px;
+        y: 0px;
         width: 128px;
-        height: 58px;
+        height: 56px;
         clicked => {
             root.show-diagnostics = true;
         }
 
         Rectangle {
-            border-radius: 16px;
-            background: data-touch.pressed ? Palette.panel : #00000000;
+            x: 14px;
+            y: 8px;
+            width: 104px;
+            height: 40px;
+            border-radius: 20px;
+            background: data-touch.pressed ? Palette.track : #171110d0;
+            border-width: 1px;
+            border-color: Palette.panel-line;
 
             Rectangle {
-                x: 36px;
-                y: 25px;
+                x: 16px;
+                y: 16px;
                 width: 8px;
                 height: 8px;
                 border-radius: 4px;
@@ -264,7 +291,7 @@ export component MainWindow inherits Window {
             }
 
             Text {
-                x: 52px;
+                x: 32px;
                 width: 64px;
                 height: 100%;
                 text: root.data-label;
@@ -272,7 +299,7 @@ export component MainWindow inherits Window {
                 font-size: 14px;
                 font-weight: 700;
                 letter-spacing: 0.6px;
-                horizontal-alignment: right;
+                horizontal-alignment: center;
                 vertical-alignment: center;
             }
         }

@@ -473,6 +473,7 @@ async fn main(spawner: Spawner) -> ! {
                     ui.set_battery_known(stats.battery_present);
                     ui.set_battery_percent(i32::from(stats.state_of_charge));
                     ui.set_battery_charging(stats.charging);
+                    ui.set_usb_connected(stats.vbus_good);
                     ui.set_battery_voltage(if stats.battery_present {
                         format!("{} mV", stats.battery_mv).into()
                     } else {
@@ -588,5 +589,4 @@ async fn main(spawner: Spawner) -> ! {
             UiEvent::Animation => {}
         }
     }
-
 }
