@@ -2,6 +2,21 @@
 runner = "probe-rs run --chip=esp32s3 --preverify --always-print-stacktrace --no-location"
 
 [env]
+# Do not raise this to a bare `debug`. defmt's filter is per-crate and applied
+# at compile time, so a bare level applies to every dependency — including
+# esp-hal, which logs every single DMA transfer at debug. A full frame is 60
+# transfers, and defmt-rtt blocks the application when its buffer fills
+# (MODE_BLOCK_IF_FULL, the default under probe-rs), so that flood stalls the
+# cooperative executor and takes the radio down with it.
+#
+# To get debug out of this crate only, override on the command line:
+#
+#   DEFMT_LOG=info,claudial_firmware=debug cargo build --release
+#
+# The leading bare level matters: without it every other crate falls back to
+# `error` and esp-hal's useful init lines vanish too. Narrower still works,
+# e.g. `claudial_firmware::ble=debug`. Expect a rebuild of every crate that
+# expands a defmt macro — about 47 of them — whenever this value changes.
 DEFMT_LOG="info"
 
 [build]
