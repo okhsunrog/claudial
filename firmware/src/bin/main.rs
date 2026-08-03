@@ -9,7 +9,6 @@
 
 use alloc::boxed::Box;
 use alloc::format;
-use alloc::vec;
 use claudial_firmware::ble::{ble_task, clock_sync_task, usage_task};
 use claudial_firmware::board::{DISPLAY_HEIGHT, DISPLAY_SPI_MHZ, DISPLAY_WIDTH};
 use claudial_firmware::co5300::{self, Co5300, brightness_register};
@@ -39,8 +38,6 @@ use ergot::interface_manager::profiles::direct_edge::DirectEdge;
 use ergot::interface_manager::utils::framed_stream;
 use esp_hal::clock::CpuClock;
 use esp_hal::delay::Delay;
-use esp_hal::dma::{DmaRxBuf, DmaTxBuf};
-use esp_hal::dma_buffers;
 use esp_hal::gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull};
 use esp_hal::i2c::master::{Config as I2cConfig, I2c};
 use esp_hal::spi::Mode;
@@ -50,15 +47,11 @@ use esp_hal::timer::timg::TimerGroup;
 use esp_radio::ble::controller::BleConnector;
 use panic_rtt_target as _;
 use slint::platform::software_renderer::{
-    DirtyRegionAlignment, MinimalSoftwareWindow, RepaintBufferType, Rgb565BigEndianPixel,
+    DirtyRegionAlignment, MinimalSoftwareWindow, RepaintBufferType,
 };
 use static_cell::StaticCell;
 
 extern crate alloc;
-
-const DISPLAY_WIDTH_USIZE: usize = DISPLAY_WIDTH as usize;
-const FRAMEBUFFER_PIXELS: usize = DISPLAY_WIDTH_USIZE * DISPLAY_HEIGHT as usize;
-const DISPLAY_DMA_BUFFER_SIZE: usize = co5300::MAX_TRANSFER_BYTES;
 
 // These live in statics so spawned tasks can be handed `&'static` references,
 // but every task takes the group it uses as a parameter, so this is the only
@@ -379,10 +372,8 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(pmic_task(i2c_bus, &PMIC).unwrap());
     spawner.spawn(rtc_task(i2c_bus, &RTC).unwrap());
 
-    let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) =
-        dma_buffers!(DISPLAY_DMA_BUFFER_SIZE);
-    let dma_rx_buffer = DmaRxBuf::new(rx_descriptors, rx_buffer).unwrap();
-    let dma_tx_buffer = DmaTxBuf::new(tx_descriptors, tx_buffer).unwrap();
+    let display_render_buffer = esp_hal::dma_tx_buffer!(co5300::TILE_BUFFER_BYTES).unwrap();
+    let display_transmit_buffer = esp_hal::dma_tx_buffer!(co5300::TILE_BUFFER_BYTES).unwrap();
 
     let display_spi = Spi::new(
         peripherals.SPI2,
@@ -396,8 +387,7 @@ async fn main(spawner: Spawner) -> ! {
     .with_sio2(peripherals.GPIO6)
     .with_sio3(peripherals.GPIO7)
     .with_sck(peripherals.GPIO38)
-    .with_dma(peripherals.DMA_CH0)
-    .with_buffers(dma_rx_buffer, dma_tx_buffer);
+    .with_dma(peripherals.DMA_CH0);
 
     let display_cs = Output::new(peripherals.GPIO12, Level::High, OutputConfig::default());
     let display_reset = Output::new(peripherals.GPIO39, Level::High, OutputConfig::default());
@@ -405,19 +395,17 @@ async fn main(spawner: Spawner) -> ! {
         display_spi,
         display_cs,
         display_reset,
+        display_render_buffer,
+        display_transmit_buffer,
         DISPLAY_WIDTH,
         DISPLAY_HEIGHT,
-    );
+    )
+    .unwrap();
     display.init(&mut Delay::new()).unwrap();
     display
         .set_brightness(brightness_register(display_settings.brightness_percent))
         .unwrap();
     info!("CO5300 initialized");
-
-    // This allocation is larger than the internal heap and therefore lands in
-    // the explicitly initialized 8 MiB PSRAM region.
-    let mut framebuffer =
-        vec![Rgb565BigEndianPixel::default(); FRAMEBUFFER_PIXELS].into_boxed_slice();
 
     let slint_window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
     slint_window.set_size(slint::PhysicalSize::new(
@@ -473,14 +461,9 @@ async fn main(spawner: Spawner) -> ! {
             let rendered = slint_window.draw_if_needed(|renderer| {
                 renderer.set_dirty_region_alignment(DirtyRegionAlignment::new(2, 2));
 
-                let render_start = HalInstant::now();
-                let region = renderer.render(&mut framebuffer, DISPLAY_WIDTH_USIZE);
-                let upload_start = HalInstant::now();
-                let transfers = display.write_region(&framebuffer, DISPLAY_WIDTH_USIZE, &region);
-                let upload_end = HalInstant::now();
-
-                frame.render_us = (upload_start - render_start).as_micros() as u32;
-                frame.upload_us = (upload_end - upload_start).as_micros() as u32;
+                let pipeline_start = HalInstant::now();
+                let region = renderer.render_by_line(&mut display);
+                frame.pipeline_us = pipeline_start.elapsed().as_micros() as u32;
                 (frame.pixels, frame.rects) =
                     region.iter().fold((0, 0), |(pixels, rects), (_, size)| {
                         (
@@ -488,15 +471,17 @@ async fn main(spawner: Spawner) -> ! {
                             rects + 1,
                         )
                     });
-                match transfers {
+            });
+            if rendered {
+                let finish_start = HalInstant::now();
+                match display.finish_frame() {
                     Ok(transfers) => frame.transfers = transfers,
                     Err(_) => present_failed = true,
                 }
-            });
+                frame.finish_us = finish_start.elapsed().as_micros() as u32;
+            }
             if present_failed {
-                // The framebuffer holds the frame the panel never received, so the
-                // damage must be re-sent rather than dropped.
-                error!("CO5300 region upload failed; retrying next frame");
+                error!("CO5300 line upload failed; retrying next frame");
                 slint_window.request_redraw();
             }
             if rendered {

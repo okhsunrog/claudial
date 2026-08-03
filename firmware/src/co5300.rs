@@ -25,13 +25,18 @@
 //! The 40 MHz clock is deliberate. The datasheet's minimum write clock period
 //! of 20 ns puts the ceiling at 50 MHz, so 80 MHz would be out of spec.
 
-use bytemuck::cast_slice;
+use core::mem::size_of;
+use core::ops::Range;
+
+use bytemuck::cast_slice_mut;
 use embedded_hal::delay::DelayNs;
 use esp_hal::Blocking;
+use esp_hal::dma::DmaTxBuf;
 use esp_hal::gpio::Output;
 use esp_hal::spi;
-use esp_hal::spi::master::{Address, Command, DataMode, SpiDmaBus};
-use slint::platform::software_renderer::{PhysicalRegion, Rgb565BigEndianPixel};
+use esp_hal::spi::master::{Address, Command, DataMode, SpiDma, SpiDmaTransfer};
+use heapless::Vec;
+use slint::platform::software_renderer::{LineBufferProvider, Rgb565BigEndianPixel};
 
 /// Dimmest setting the UI offers. The panel is legible below this, but the
 /// steppers would otherwise walk it down to fully black.
@@ -43,12 +48,20 @@ pub fn brightness_register(percent: u8) -> u8 {
     ((u16::from(percent) * u16::from(u8::MAX) + 50) / 100) as u8
 }
 
-/// Largest pixel payload the driver puts into a single DMA transfer.
+/// Number of display rows accumulated before a QSPI upload.
 ///
-/// `SpiDmaBus::half_duplex_write` rejects a slice larger than the DMA transmit
-/// buffer it was constructed with, so the SPI bus handed to [`Co5300::new`]
-/// must be built with buffers of at least this size.
-pub const MAX_TRANSFER_BYTES: usize = 7680;
+/// Eight is deliberately even, preserving the CO5300's 2x2 address-window
+/// requirement when an aligned dirty rectangle crosses a tile boundary.
+pub const TILE_LINES: usize = 8;
+/// Size of each of the two internal DMA-capable buffers: 480 x 8 x RGB565.
+pub const TILE_BUFFER_BYTES: usize = 7680;
+
+const BYTES_PER_PIXEL: usize = size_of::<Rgb565BigEndianPixel>();
+// A Slint PhysicalRegion currently contains at most three rectangles, hence at
+// most three callbacks per line. Keep spare capacity so a future increase is a
+// recoverable frame error instead of a memory overwrite.
+const MAX_DIRTY_SPANS: usize = TILE_LINES * 4;
+const MAX_DIRTY_RECTS: usize = MAX_DIRTY_SPANS;
 
 const QSPI_WRITE_COMMAND: u16 = 0x02;
 const QSPI_WRITE_PIXELS: u16 = 0x32;
@@ -73,7 +86,9 @@ const SPI_MODE_CONTROL: u8 = 0xc4;
 #[derive(Debug)]
 pub enum Error {
     Spi(spi::Error),
+    BufferTooSmall,
     InvalidRegion,
+    MissingResource,
 }
 
 impl From<spi::Error> for Error {
@@ -83,28 +98,71 @@ impl From<spi::Error> for Error {
 }
 
 pub struct Co5300<'d> {
-    spi: SpiDmaBus<'d, Blocking>,
+    spi: Option<SpiDma<'d, Blocking>>,
+    render_buffer: DmaTxBuf,
+    transmit_buffer: Option<DmaTxBuf>,
+    pending: Option<SpiDmaTransfer<'d, Blocking, DmaTxBuf>>,
     chip_select: Output<'d>,
     reset: Output<'d>,
+    width: u16,
+    height: u16,
+    band_y: Option<u16>,
+    dirty_spans: Vec<DirtySpan, MAX_DIRTY_SPANS>,
+    frame_transfers: u32,
+    frame_error: Option<Error>,
+}
+
+#[derive(Clone, Copy)]
+struct DirtySpan {
+    line: u16,
+    start: u16,
+    end: u16,
+}
+
+#[derive(Clone, Copy)]
+struct DirtyRect {
+    x: u16,
+    y: u16,
     width: u16,
     height: u16,
 }
 
 impl<'d> Co5300<'d> {
     pub fn new(
-        spi: SpiDmaBus<'d, Blocking>,
+        spi: SpiDma<'d, Blocking>,
         chip_select: Output<'d>,
         reset: Output<'d>,
+        render_buffer: DmaTxBuf,
+        transmit_buffer: DmaTxBuf,
         width: u16,
         height: u16,
-    ) -> Self {
-        Self {
-            spi,
+    ) -> Result<Self, Error> {
+        let required_capacity = width as usize * TILE_LINES * BYTES_PER_PIXEL;
+        if required_capacity > TILE_BUFFER_BYTES
+            || render_buffer.capacity() < required_capacity
+            || transmit_buffer.capacity() < required_capacity
+        {
+            return Err(Error::BufferTooSmall);
+        }
+        debug_assert!(
+            (render_buffer.as_slice().as_ptr() as usize).is_multiple_of(BYTES_PER_PIXEL),
+            "render DMA buffer must be aligned for RGB565 pixels"
+        );
+
+        Ok(Self {
+            spi: Some(spi),
+            render_buffer,
+            transmit_buffer: Some(transmit_buffer),
+            pending: None,
             chip_select,
             reset,
             width,
             height,
-        }
+            band_y: None,
+            dirty_spans: Vec::new(),
+            frame_transfers: 0,
+            frame_error: None,
+        })
     }
 
     /// Reset and initialize the panel using Waveshare's CO5300 sequence.
@@ -160,104 +218,156 @@ impl<'d> Co5300<'d> {
         self.write_command(DISPLAY_ON, &[])
     }
 
-    /// Send every rectangle rendered by Slint to the panel.
-    ///
-    /// The caller must pass the same buffer, stride, and region that
-    /// `SoftwareRenderer::render` just produced, for a window sized to this
-    /// panel. Under that contract Slint has already guaranteed everything the
-    /// CO5300 needs, so nothing is re-validated on this hot path:
-    ///
-    /// - rectangles are clipped to the window (`to_physical_region` intersects
-    ///   each box with the screen rect) and are never empty,
-    /// - with `DirtyRegionAlignment(2, 2)` on a panel whose dimensions are a
-    ///   multiple of 2, `snap_interval_to_grid` rounds each edge outwards to an
-    ///   even coordinate and clamps the far edge to the panel size, giving the
-    ///   even origin and even extent the controller requires,
-    /// - the buffer is large enough for the stride, which `render` asserts
-    ///   before returning.
-    ///
-    /// Returns how many DMA transfers the upload took, which is what the row
-    /// coalescing below is meant to reduce.
-    pub fn write_region(
-        &mut self,
-        framebuffer: &[Rgb565BigEndianPixel],
-        stride: usize,
-        region: &PhysicalRegion,
-    ) -> Result<u32, Error> {
-        debug_assert!(
-            stride >= self.width as usize && framebuffer.len() >= stride * self.height as usize,
-            "framebuffer smaller than the panel"
-        );
+    /// Flush the final tile, wait for its DMA transfer, and finish one Slint frame.
+    pub fn finish_frame(&mut self) -> Result<u32, Error> {
+        let result = if let Some(error) = self.frame_error.take() {
+            Err(error)
+        } else {
+            self.flush_band()
+        };
+        self.wait_pending();
 
-        let mut transfers = 0_u32;
-        for (position, size) in region.iter() {
-            let x = u16::try_from(position.x).map_err(|_| Error::InvalidRegion)?;
-            let y = u16::try_from(position.y).map_err(|_| Error::InvalidRegion)?;
-            let width = u16::try_from(size.width).map_err(|_| Error::InvalidRegion)?;
-            let height = u16::try_from(size.height).map_err(|_| Error::InvalidRegion)?;
+        let transfers = self.frame_transfers;
+        self.frame_transfers = 0;
+        self.band_y = None;
+        self.dirty_spans.clear();
 
-            // Catches the one thing Slint cannot: this panel's dimensions
-            // drifting apart from the window size the renderer was given.
-            debug_assert!(
-                (x | y | width | height) & 1 == 0
-                    && width > 0
-                    && height > 0
-                    && x + width <= self.width
-                    && y + height <= self.height,
-                "region rectangle is not an even, in-bounds sub-rectangle of the panel"
-            );
+        result.map(|()| transfers)
+    }
 
-            self.set_address_window(x, y, width, height)?;
-            self.write_command(MEMORY_WRITE_START, &[])?;
+    fn set_frame_error(&mut self, error: Error) {
+        if self.frame_error.is_none() {
+            self.frame_error = Some(error);
+        }
+    }
 
-            self.chip_select.set_low();
-            let mut first_chunk = true;
-            let mut issued = 0_u32;
-            let transfer_result = (|| {
-                let first_row = y as usize;
-                let last_row = first_row + height as usize;
+    fn flush_band(&mut self) -> Result<(), Error> {
+        let Some(band_y) = self.band_y else {
+            return Ok(());
+        };
 
-                // A rectangle spanning the full stride has contiguous rows, so
-                // it can go out in transfers as large as the DMA buffer allows
-                // instead of one per row. The controller keeps filling the
-                // address window across transfers, so only the first carries a
-                // command and address either way.
-                let rows_per_chunk = if x == 0 && width as usize == stride {
-                    (MAX_TRANSFER_BYTES / (width as usize * 2)).max(1)
-                } else {
-                    1
-                };
-
-                for chunk_start in (first_row..last_row).step_by(rows_per_chunk) {
-                    let chunk_rows = rows_per_chunk.min(last_row - chunk_start);
-                    let begin = chunk_start * stride + x as usize;
-                    let end = begin + chunk_rows * width as usize;
-                    let bytes = cast_slice(&framebuffer[begin..end]);
-
-                    let command = if first_chunk {
-                        Command::_8Bit(QSPI_WRITE_PIXELS, DataMode::Single)
-                    } else {
-                        Command::None
-                    };
-                    let address = if first_chunk {
-                        Address::_24Bit(QSPI_MEMORY_CONTINUE_ADDRESS, DataMode::Single)
-                    } else {
-                        Address::None
-                    };
-
-                    self.spi
-                        .half_duplex_write(DataMode::Quad, command, address, 0, bytes)?;
-                    first_chunk = false;
-                    issued += 1;
+        let mut rectangles = Vec::<DirtyRect, MAX_DIRTY_RECTS>::new();
+        for span in self.dirty_spans.iter().copied() {
+            let width = span
+                .end
+                .checked_sub(span.start)
+                .ok_or(Error::InvalidRegion)?;
+            let mut extended = false;
+            for rectangle in rectangles.iter_mut().rev() {
+                if rectangle.x == span.start
+                    && rectangle.width == width
+                    && rectangle.y + rectangle.height == span.line
+                {
+                    rectangle.height += 1;
+                    extended = true;
+                    break;
                 }
-                Ok::<(), spi::Error>(())
-            })();
-            self.chip_select.set_high();
-            transfer_result?;
-            transfers += issued;
+            }
+            if !extended {
+                rectangles
+                    .push(DirtyRect {
+                        x: span.start,
+                        y: span.line,
+                        width,
+                        height: 1,
+                    })
+                    .map_err(|_| Error::InvalidRegion)?;
+            }
         }
 
-        Ok(transfers)
+        for rectangle in rectangles {
+            self.write_rectangle(band_y, rectangle)?;
+        }
+
+        self.band_y = None;
+        self.dirty_spans.clear();
+        Ok(())
+    }
+
+    fn write_rectangle(&mut self, band_y: u16, rectangle: DirtyRect) -> Result<(), Error> {
+        let DirtyRect {
+            x,
+            y,
+            width,
+            height,
+        } = rectangle;
+        if width == 0
+            || height == 0
+            || (x | y | width | height) & 1 != 0
+            || x.checked_add(width).is_none_or(|end| end > self.width)
+            || y.checked_add(height).is_none_or(|end| end > self.height)
+            || y < band_y
+            || usize::from(y - band_y) + usize::from(height) > TILE_LINES
+        {
+            return Err(Error::InvalidRegion);
+        }
+
+        self.wait_pending();
+        self.set_address_window(x, y, width, height)?;
+        self.write_command(MEMORY_WRITE_START, &[])?;
+
+        let row_bytes = usize::from(width) * BYTES_PER_PIXEL;
+        let byte_len = row_bytes * usize::from(height);
+        if byte_len > TILE_BUFFER_BYTES {
+            return Err(Error::BufferTooSmall);
+        }
+
+        let source_stride = usize::from(self.width) * BYTES_PER_PIXEL;
+        let source_x = usize::from(x) * BYTES_PER_PIXEL;
+        let source_row = usize::from(y - band_y);
+        let render_bytes = self.render_buffer.as_slice();
+        let transmit_buffer = self
+            .transmit_buffer
+            .as_mut()
+            .ok_or(Error::MissingResource)?;
+        let transmit_bytes = transmit_buffer.as_mut_slice();
+        for row in 0..usize::from(height) {
+            let source_begin = (source_row + row) * source_stride + source_x;
+            let source_end = source_begin + row_bytes;
+            let target_begin = row * row_bytes;
+            transmit_bytes[target_begin..target_begin + row_bytes]
+                .copy_from_slice(&render_bytes[source_begin..source_end]);
+        }
+
+        self.start_pixel_transfer(byte_len)?;
+        self.frame_transfers += 1;
+        Ok(())
+    }
+
+    fn start_pixel_transfer(&mut self, byte_len: usize) -> Result<(), Error> {
+        let spi = self.spi.take().ok_or(Error::MissingResource)?;
+        let mut transmit_buffer = self.transmit_buffer.take().ok_or(Error::MissingResource)?;
+        transmit_buffer.set_length(byte_len);
+        self.chip_select.set_low();
+
+        match spi.half_duplex_write(
+            DataMode::Quad,
+            Command::_8Bit(QSPI_WRITE_PIXELS, DataMode::Single),
+            Address::_24Bit(QSPI_MEMORY_CONTINUE_ADDRESS, DataMode::Single),
+            0,
+            byte_len,
+            transmit_buffer,
+        ) {
+            Ok(transfer) => {
+                self.pending = Some(transfer);
+                Ok(())
+            }
+            Err((error, spi, transmit_buffer)) => {
+                self.chip_select.set_high();
+                self.spi = Some(spi);
+                self.transmit_buffer = Some(transmit_buffer);
+                Err(Error::Spi(error))
+            }
+        }
+    }
+
+    fn wait_pending(&mut self) {
+        if let Some(transfer) = self.pending.take() {
+            let (spi, transmit_buffer) = transfer.wait();
+            self.spi = Some(spi);
+            self.transmit_buffer = Some(transmit_buffer);
+            self.chip_select.set_high();
+        }
     }
 
     fn set_address_window(&mut self, x: u16, y: u16, width: u16, height: u16) -> Result<(), Error> {
@@ -274,15 +384,87 @@ impl<'d> Co5300<'d> {
     }
 
     fn write_command(&mut self, command: u8, parameters: &[u8]) -> Result<(), Error> {
+        self.wait_pending();
+
+        let spi = self.spi.take().ok_or(Error::MissingResource)?;
+        let mut transmit_buffer = self.transmit_buffer.take().ok_or(Error::MissingResource)?;
+        transmit_buffer.fill(parameters);
         self.chip_select.set_low();
-        let result = self.spi.half_duplex_write(
+        let result = spi.half_duplex_write(
             DataMode::Single,
             Command::_8Bit(QSPI_WRITE_COMMAND, DataMode::Single),
             Address::_24Bit(u32::from(command) << 8, DataMode::Single),
             0,
-            parameters,
+            parameters.len(),
+            transmit_buffer,
         );
-        self.chip_select.set_high();
-        result.map_err(Error::Spi)
+        match result {
+            Ok(transfer) => {
+                let (spi, transmit_buffer) = transfer.wait();
+                self.chip_select.set_high();
+                self.spi = Some(spi);
+                self.transmit_buffer = Some(transmit_buffer);
+                Ok(())
+            }
+            Err((error, spi, transmit_buffer)) => {
+                self.chip_select.set_high();
+                self.spi = Some(spi);
+                self.transmit_buffer = Some(transmit_buffer);
+                Err(Error::Spi(error))
+            }
+        }
+    }
+}
+
+impl LineBufferProvider for &mut Co5300<'_> {
+    type TargetPixel = Rgb565BigEndianPixel;
+
+    fn process_line(
+        &mut self,
+        line: usize,
+        range: Range<usize>,
+        render_fn: impl FnOnce(&mut [Self::TargetPixel]),
+    ) {
+        if self.frame_error.is_some() || range.is_empty() {
+            return;
+        }
+        if line >= usize::from(self.height) || range.end > usize::from(self.width) {
+            self.set_frame_error(Error::InvalidRegion);
+            return;
+        }
+
+        let band_y = line / TILE_LINES * TILE_LINES;
+        if self
+            .band_y
+            .is_some_and(|current| usize::from(current) != band_y)
+            && let Err(error) = self.flush_band()
+        {
+            self.set_frame_error(error);
+            return;
+        }
+        self.band_y.get_or_insert(band_y as u16);
+
+        let row = line - band_y;
+        let pixel_begin = row * usize::from(self.width) + range.start;
+        let pixel_end = pixel_begin + range.len();
+        let pixel_capacity = self.render_buffer.capacity() / BYTES_PER_PIXEL;
+        if pixel_end > pixel_capacity {
+            self.set_frame_error(Error::BufferTooSmall);
+            return;
+        }
+
+        let pixels = cast_slice_mut::<u8, Rgb565BigEndianPixel>(
+            &mut self.render_buffer.as_mut_slice()[..pixel_capacity * BYTES_PER_PIXEL],
+        );
+        render_fn(&mut pixels[pixel_begin..pixel_end]);
+
+        let span = DirtySpan {
+            line: line as u16,
+            start: range.start as u16,
+            end: range.end as u16,
+        };
+        if self.dirty_spans.push(span).is_err() {
+            self.set_frame_error(Error::InvalidRegion);
+        }
     }
 }

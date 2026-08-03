@@ -1,7 +1,7 @@
-//! Per-frame render and upload cost.
+//! Per-frame line-rendering and upload cost.
 //!
-//! Rendering into the PSRAM framebuffer and pushing damaged rectangles over
-//! QSPI are timed separately because they are optimized independently.
+//! Slint rendering and QSPI DMA overlap inside `render_by_line`, so the useful
+//! split is the main pipeline and the final tile flush/drain.
 
 use defmt::{debug, info};
 
@@ -11,13 +11,11 @@ const DETAILED_FRAMES: u32 = 8;
 /// Frames per summary once individual reporting stops.
 const SUMMARY_FRAMES: u32 = 16;
 
-/// What one frame cost, split into the two halves that are optimized
-/// independently: rendering into the PSRAM framebuffer, and pushing the damaged
-/// rectangles out over QSPI.
+/// What one line-rendered frame cost.
 #[derive(Clone, Copy, Default)]
 pub struct FrameTiming {
-    pub render_us: u32,
-    pub upload_us: u32,
+    pub pipeline_us: u32,
+    pub finish_us: u32,
     pub pixels: u64,
     pub rects: u32,
     pub transfers: u32,
@@ -32,22 +30,22 @@ pub struct FrameTiming {
 #[derive(Default)]
 pub struct FrameStats {
     frames: u32,
-    render_us: u64,
-    upload_us: u64,
+    pipeline_us: u64,
+    finish_us: u64,
     pixels: u64,
     transfers: u64,
-    worst_render_us: u32,
-    worst_upload_us: u32,
+    worst_pipeline_us: u32,
+    worst_finish_us: u32,
 }
 
 impl FrameStats {
     pub fn record(&mut self, frame_number: u32, frame: FrameTiming) {
         if frame_number <= DETAILED_FRAMES {
             info!(
-                "frame {}: render {} us, upload {} us, {} px in {} rect(s), {} transfer(s)",
+                "frame {}: pipeline {} us, finish {} us, {} px in {} rect(s), {} transfer(s)",
                 frame_number,
-                frame.render_us,
-                frame.upload_us,
+                frame.pipeline_us,
+                frame.finish_us,
                 frame.pixels,
                 frame.rects,
                 frame.transfers
@@ -56,24 +54,24 @@ impl FrameStats {
         }
 
         self.frames += 1;
-        self.render_us += u64::from(frame.render_us);
-        self.upload_us += u64::from(frame.upload_us);
+        self.pipeline_us += u64::from(frame.pipeline_us);
+        self.finish_us += u64::from(frame.finish_us);
         self.pixels += frame.pixels;
         self.transfers += u64::from(frame.transfers);
-        self.worst_render_us = self.worst_render_us.max(frame.render_us);
-        self.worst_upload_us = self.worst_upload_us.max(frame.upload_us);
+        self.worst_pipeline_us = self.worst_pipeline_us.max(frame.pipeline_us);
+        self.worst_finish_us = self.worst_finish_us.max(frame.finish_us);
 
         if self.frames < SUMMARY_FRAMES {
             return;
         }
 
         debug!(
-            "{} frames: render {} us avg / {} us worst, upload {} us avg / {} us worst, {} px, {} transfers",
+            "{} frames: pipeline {} us avg / {} us worst, finish {} us avg / {} us worst, {} px, {} transfers",
             self.frames,
-            self.render_us / u64::from(self.frames),
-            self.worst_render_us,
-            self.upload_us / u64::from(self.frames),
-            self.worst_upload_us,
+            self.pipeline_us / u64::from(self.frames),
+            self.worst_pipeline_us,
+            self.finish_us / u64::from(self.frames),
+            self.worst_finish_us,
             self.pixels,
             self.transfers
         );
