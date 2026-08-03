@@ -46,21 +46,22 @@ component DotRing inherits Rectangle {
 
 component BatteryIcon inherits Rectangle {
     in property <int> percent: 0;
-    in property <bool> charging: false;
+    in property <bool> powered: false;
     in property <bool> known: false;
 
-    property <color> fill: root.charging ? Palette.ok : root.percent <= 15 ? Palette.danger : root.percent <= 30 ? Palette.weekly : Palette.ink;
+    property <color> shell: root.known ? #aaa39e : Palette.track;
+    property <color> fill: root.powered ? #30d158 : root.percent <= 20 ? #ff453a : Palette.ink;
 
-    width: 62px;
-    height: 26px;
+    width: 66px;
+    height: 30px;
 
     Rectangle {
         x: 0px;
         y: 0px;
-        width: 58px;
+        width: 62px;
         height: 100%;
-        border-radius: 9px;
-        background: root.known ? Palette.mid : Palette.track;
+        border-radius: 10px;
+        background: root.shell;
         clip: true;
 
         Rectangle {
@@ -68,7 +69,7 @@ component BatteryIcon inherits Rectangle {
             y: 0px;
             width: root.known ? Math.max(0, Math.min(100, root.percent)) * parent.width / 100 : 0px;
             height: 100%;
-            border-radius: 9px;
+            border-radius: 10px;
             background: root.fill;
         }
 
@@ -79,20 +80,21 @@ component BatteryIcon inherits Rectangle {
             height: 100%;
             text: root.known ? root.percent : "--";
             color: root.known ? Palette.bg : Palette.mid;
-            font-size: 15px;
-            font-weight: 800;
+            font-size: 19px;
+            font-weight: 900;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
     }
 
     Rectangle {
-        x: 58px;
-        y: 8px;
+        x: 62px;
+        y: 9px;
         width: 4px;
-        height: 10px;
-        border-radius: 2px;
-        background: root.known ? Palette.mid : Palette.track;
+        height: 12px;
+        border-radius: 1.5px;
+        background: root.shell;
+        visible: !root.powered;
     }
 }
 
@@ -168,7 +170,6 @@ export component MainWindow inherits Window {
     in property <bool> data-fresh: false;
     in property <bool> battery-known: false;
     in property <int> battery-percent: 0;
-    in property <bool> battery-charging: false;
     in property <bool> usb-connected: false;
 
     // Diagnostics only.
@@ -245,19 +246,19 @@ export component MainWindow inherits Window {
 
             BatteryIcon {
                 x: 8px;
-                y: 7px;
+                y: 5px;
                 percent: root.battery-percent;
-                charging: root.battery-charging;
+                powered: root.usb-connected;
                 known: root.battery-known;
             }
 
             if root.usb-connected: Image {
-                x: 80px;
-                y: 8px;
-                width: 12px;
-                height: 24px;
+                x: 70px;
+                y: 5px;
+                width: 20px;
+                height: 30px;
                 source: @image-url("icons/lightning.svg");
-                colorize: Palette.ok;
+                colorize: Palette.ink;
             }
         }
     }
