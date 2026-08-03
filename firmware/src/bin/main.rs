@@ -10,7 +10,7 @@
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::vec;
-use claudial_firmware::ble::{ble_task, usage_task};
+use claudial_firmware::ble::{ble_task, clock_sync_task, usage_task};
 use claudial_firmware::board::{DISPLAY_HEIGHT, DISPLAY_SPI_MHZ, DISPLAY_WIDTH};
 use claudial_firmware::co5300::{self, Co5300, brightness_register};
 use claudial_firmware::events::{
@@ -19,12 +19,13 @@ use claudial_firmware::events::{
 };
 use claudial_firmware::frame_stats::{FrameStats, FrameTiming};
 use claudial_firmware::pmic::PowerKey;
+use claudial_firmware::rtc::Snapshot as RtcSnapshot;
 use claudial_firmware::slint_platform::EspPlatform;
 use claudial_firmware::tasks::{SharedI2cBus, pmic_task, rtc_task, touch_task};
 use claudial_firmware::transport::{BLE_MTU, BLE_OUTQ, Stack};
 use claudial_firmware::ui::{self, MainWindow, dispatch_touch_state, update_clock};
 use claudial_icd::pace::Pace;
-use claudial_icd::{UsageSnapshot, UsageStatus};
+use claudial_icd::{UsageSnapshot, UsageStatus, minutes_until};
 use defmt::{error, info};
 use embassy_executor::Spawner;
 use embassy_sync::mutex::Mutex;
@@ -100,7 +101,7 @@ fn update_data_state(ui: &MainWindow, ble_connected: bool, last_usage_at: Option
     );
 }
 
-fn update_pace(ui: &MainWindow, pace: &Pace, snapshot: UsageSnapshot) {
+fn update_pace(ui: &MainWindow, pace: &Pace, snapshot: UsageSnapshot, session_reset_mins: u16) {
     if snapshot.status == UsageStatus::Limited || snapshot.session_pct >= 100 {
         ui.set_pace_summary("LIMIT REACHED".into());
         ui.set_pace_warning(true);
@@ -117,7 +118,7 @@ fn update_pace(ui: &MainWindow, pace: &Pace, snapshot: UsageSnapshot) {
         ui.set_pace_warning(false);
         return;
     }
-    if snapshot.session_reset_mins == 0 || snapshot.status == UsageStatus::Unknown {
+    if session_reset_mins == 0 || snapshot.status == UsageStatus::Unknown {
         ui.set_pace_summary(format!("PACE {rate}%/h").into());
         ui.set_pace_warning(false);
         return;
@@ -125,7 +126,7 @@ fn update_pace(ui: &MainWindow, pace: &Pace, snapshot: UsageSnapshot) {
 
     let remaining = u32::from(100_u8.saturating_sub(snapshot.session_pct));
     let minutes_to_exhaust = remaining * 60 / u32::from(rate);
-    let exhausts_early = minutes_to_exhaust < u32::from(snapshot.session_reset_mins);
+    let exhausts_early = minutes_to_exhaust < u32::from(session_reset_mins);
     ui.set_pace_summary(
         if exhausts_early {
             format!("PACE {rate}%/h · TOO FAST")
@@ -135,6 +136,25 @@ fn update_pace(ui: &MainWindow, pace: &Pace, snapshot: UsageSnapshot) {
         .into(),
     );
     ui.set_pace_warning(exhausts_early);
+}
+
+fn update_time_dependent_usage(
+    ui: &MainWindow,
+    pace: &Pace,
+    usage: UsageSnapshot,
+    rtc: Option<RtcSnapshot>,
+) {
+    let now = rtc.and_then(RtcSnapshot::unix_timestamp);
+    let session_reset_mins = now
+        .map(|now| minutes_until(usage.session_reset_at, now))
+        .unwrap_or(0);
+    let weekly_reset_mins = now
+        .map(|now| minutes_until(usage.weekly_reset_at, now))
+        .unwrap_or(0);
+
+    update_pace(ui, pace, usage, session_reset_mins);
+    ui.set_usage_session_reset(format_reset(session_reset_mins).into());
+    ui.set_usage_weekly_reset(format_reset(weekly_reset_mins).into());
 }
 
 async fn wake_display(
@@ -173,9 +193,6 @@ esp_bootloader_esp_idf::esp_app_desc!();
 )]
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
-    // generator version: 1.3.0
-    // generator parameters: --chip esp32s3 -o unstable-hal -o alloc -o esp -o embassy -o ble-trouble -o probe-rs -o defmt -o panic-rtt-target -o embedded-test -o ci -o vscode -o neovim -o zed
-
     rtt_target::rtt_init_defmt!();
 
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
@@ -214,6 +231,7 @@ async fn main(spawner: Spawner) -> ! {
     let ble_connector = BleConnector::new(peripherals.BT, Default::default()).unwrap();
     spawner.spawn(ble_task(ergot_stack, ble_connector, &BLE).unwrap());
     spawner.spawn(usage_task(ergot_stack, &USAGE).unwrap());
+    spawner.spawn(clock_sync_task(ergot_stack, &RTC).unwrap());
 
     let i2c = I2c::new(
         peripherals.I2C0,
@@ -296,6 +314,8 @@ async fn main(spawner: Spawner) -> ! {
     };
 
     let mut pace = Pace::new();
+    let mut latest_usage = UsageSnapshot::UNKNOWN;
+    let mut latest_rtc = None;
     let mut ble_connected = false;
     let mut last_usage_at = None;
     let mut idle_deadline = Some(Instant::now() + IDLE_TIMEOUT);
@@ -500,20 +520,24 @@ async fn main(spawner: Spawner) -> ! {
                 }
             },
             UiEvent::Rtc(event) => match event {
-                RtcEvent::Online(snapshot) | RtcEvent::Saved(snapshot) => {
+                RtcEvent::Online(snapshot) | RtcEvent::Synced(snapshot) => {
                     rtc_ready = true;
+                    latest_rtc = Some(snapshot);
                     update_clock(&ui, snapshot);
+                    update_time_dependent_usage(&ui, &pace, latest_usage, latest_rtc);
                 }
-                RtcEvent::NeedsSetting => {
-                    rtc_ready = true;
+                RtcEvent::SyncFailed => {
+                    latest_rtc = None;
                     ui.set_clock("--:--".into());
-                    ui.set_rtc_status("needs setting".into());
-                }
-                RtcEvent::SaveFailed => {
-                    ui.set_rtc_status("set failed".into());
+                    ui.set_rtc_status("sync failed".into());
+                    update_time_dependent_usage(&ui, &pace, latest_usage, latest_rtc);
                 }
                 RtcEvent::Error => {
+                    rtc_ready = true;
+                    latest_rtc = None;
+                    ui.set_clock("--:--".into());
                     ui.set_rtc_status("unavailable".into());
+                    update_time_dependent_usage(&ui, &pace, latest_usage, latest_rtc);
                 }
             },
             UiEvent::Brightness(percent) => {
@@ -567,14 +591,13 @@ async fn main(spawner: Spawner) -> ! {
                     .map(|received: Instant| received.elapsed().as_secs().min(u64::from(u32::MAX)))
                     .unwrap_or(0) as u32;
                 pace.record(snapshot.session_pct, elapsed_seconds);
+                latest_usage = snapshot;
                 last_usage_at = Some(Instant::now());
                 update_data_state(&ui, ble_connected, last_usage_at);
-                update_pace(&ui, &pace, snapshot);
+                update_time_dependent_usage(&ui, &pace, latest_usage, latest_rtc);
                 ui.set_usage_known(true);
                 ui.set_usage_session(i32::from(snapshot.session_pct));
                 ui.set_usage_weekly(i32::from(snapshot.weekly_pct));
-                ui.set_usage_session_reset(format_reset(snapshot.session_reset_mins).into());
-                ui.set_usage_weekly_reset(format_reset(snapshot.weekly_reset_mins).into());
                 ui.set_usage_status(
                     match snapshot.status {
                         UsageStatus::Allowed => "allowed",

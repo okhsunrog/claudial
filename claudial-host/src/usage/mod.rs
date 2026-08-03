@@ -33,11 +33,3 @@ compile_error!("enable one of the `direct` or `proxy` features");
 fn clamp_percent(percent: f64) -> u8 {
     percent.round().clamp(0.0, 100.0) as u8
 }
-
-/// Round a countdown in minutes into the `u16` the device displays.
-///
-/// Saturating at `u16::MAX` is fine: that is 45 days, far beyond any window
-/// this reports, and a reset already in the past reads as zero.
-fn clamp_minutes(minutes: f64) -> u16 {
-    minutes.round().clamp(0.0, f64::from(u16::MAX)) as u16
-}

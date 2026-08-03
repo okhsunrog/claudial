@@ -7,10 +7,10 @@ use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Ticker, Timer};
 
-use claudial_icd::UsageSnapshot;
+use claudial_icd::{ClockSync, UsageSnapshot};
 
 use crate::pmic::{PmicStats, PowerKey};
-use crate::rtc::{DateTime as RtcDateTime, Snapshot as RtcSnapshot};
+use crate::rtc::Snapshot as RtcSnapshot;
 
 pub type BrightnessSignal = Signal<CriticalSectionRawMutex, u8>;
 pub type BleSignal = Signal<CriticalSectionRawMutex, BleState>;
@@ -39,9 +39,8 @@ pub enum PmicEvent {
 #[derive(Clone, Copy)]
 pub enum RtcEvent {
     Online(RtcSnapshot),
-    NeedsSetting,
-    Saved(RtcSnapshot),
-    SaveFailed,
+    Synced(RtcSnapshot),
+    SyncFailed,
     Error,
 }
 
@@ -58,10 +57,10 @@ pub struct PmicChannels {
     pub power_off: Signal<CriticalSectionRawMutex, ()>,
 }
 
-/// What the RTC task publishes, plus the set request it consumes.
+/// What the RTC task publishes, plus the host sync it consumes.
 pub struct RtcChannels {
     pub snapshot: Signal<CriticalSectionRawMutex, RtcEvent>,
-    pub set: Signal<CriticalSectionRawMutex, RtcDateTime>,
+    pub sync: Signal<CriticalSectionRawMutex, ClockSync>,
 }
 
 #[allow(
@@ -99,7 +98,7 @@ impl RtcChannels {
     pub const fn new() -> Self {
         Self {
             snapshot: Signal::new(),
-            set: Signal::new(),
+            sync: Signal::new(),
         }
     }
 }

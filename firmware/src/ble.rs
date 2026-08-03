@@ -18,9 +18,9 @@ use static_cell::StaticCell;
 use trouble_host::prelude::*;
 
 use crate::ble_nus::{NUS_MAX_PAYLOAD, NusServer};
-use crate::events::{BleSignal, BleState, UsageSignal};
+use crate::events::{BleSignal, BleState, RtcChannels, UsageSignal};
 use crate::transport::{BLE_OUTQ, Stack};
-use claudial_icd::UsageTopic;
+use claudial_icd::{ClockSyncTopic, UsageTopic};
 
 const CONNECTIONS_MAX: usize = 1;
 const L2CAP_CHANNELS_MAX: usize = 1;
@@ -42,13 +42,30 @@ pub async fn usage_task(stack: &'static Stack, usage: &'static UsageSignal) {
     loop {
         let message = receiver.recv().await;
         info!(
-            "Usage: session {}% (reset {} min), weekly {}% (reset {} min)",
+            "Usage: session {}% (reset at {}), weekly {}% (reset at {})",
             message.t.session_pct,
-            message.t.session_reset_mins,
+            message.t.session_reset_at,
             message.t.weekly_pct,
-            message.t.weekly_reset_mins
+            message.t.weekly_reset_at
         );
         usage.signal(message.t);
+    }
+}
+
+/// Receives UTC wall-clock state from the host and hands it to the RTC task.
+#[embassy_executor::task]
+pub async fn clock_sync_task(stack: &'static Stack, rtc: &'static RtcChannels) {
+    let receiver = stack.topics().bounded_receiver::<ClockSyncTopic, 2>(None);
+    let receiver = core::pin::pin!(receiver);
+    let mut receiver = receiver.subscribe();
+
+    loop {
+        let message = receiver.recv().await;
+        info!(
+            "Clock sync: {} UTC, offset {} min",
+            message.t.unix_seconds, message.t.utc_offset_minutes
+        );
+        rtc.sync.signal(message.t);
     }
 }
 

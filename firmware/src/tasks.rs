@@ -188,9 +188,13 @@ pub async fn rtc_task(i2c_bus: &'static SharedI2cBus, channels: &'static RtcChan
                 snapshot.datetime.minute,
                 snapshot.datetime.second
             );
+            info!(
+                "RTC state: valid {}, UTC offset {}",
+                snapshot.clock_valid, snapshot.utc_offset_minutes
+            );
             channels.snapshot.signal(RtcEvent::Online(snapshot));
         }
-        Err(_) => channels.snapshot.signal(RtcEvent::NeedsSetting),
+        Err(_) => channels.snapshot.signal(RtcEvent::Error),
     }
 
     // The face does not show seconds. Reading once a minute keeps the
@@ -198,9 +202,9 @@ pub async fn rtc_task(i2c_bus: &'static SharedI2cBus, channels: &'static RtcChan
     // that is never displayed.
     let mut ticker = Ticker::every(Duration::from_secs(60));
     loop {
-        // Either a set request arrives, or the calendar is due to be re-read.
+        // Either a host sync arrives, or the calendar is due to be re-read.
         // Waiting on both beats polling the request signal on a short timer.
-        let request = match select(channels.set.wait(), ticker.next()).await {
+        let request = match select(channels.sync.wait(), ticker.next()).await {
             Either::First(request) => request,
             Either::Second(()) => {
                 match rtc::read(&mut clock).await {
@@ -214,42 +218,26 @@ pub async fn rtc_task(i2c_bus: &'static SharedI2cBus, channels: &'static RtcChan
             }
         };
 
-        {
-            let result = match request.to_primitive() {
-                Ok(datetime) => clock.set_datetime(&datetime).await,
-                Err(_) => {
-                    error!("Rejected invalid RTC date/time");
-                    channels.snapshot.signal(RtcEvent::SaveFailed);
-                    continue;
-                }
-            };
-
-            match result {
-                Ok(()) => match rtc::read(&mut clock).await {
-                    Ok(snapshot) if snapshot.clock_valid => {
-                        info!(
-                            "RTC set and verified: {}-{:02}-{:02} {:02}:{:02}:{:02}",
-                            snapshot.datetime.year,
-                            snapshot.datetime.month,
-                            snapshot.datetime.day,
-                            snapshot.datetime.hour,
-                            snapshot.datetime.minute,
-                            snapshot.datetime.second
-                        );
-                        channels.snapshot.signal(RtcEvent::Saved(snapshot));
-                        // The clock was just read, so restart the interval
-                        // rather than re-reading a moment later.
-                        ticker.reset();
-                    }
-                    _ => {
-                        error!("PCF85063 write verification failed");
-                        channels.snapshot.signal(RtcEvent::SaveFailed);
-                    }
-                },
-                Err(_) => {
-                    error!("PCF85063 write failed");
-                    channels.snapshot.signal(RtcEvent::SaveFailed);
-                }
+        match rtc::synchronize(&mut clock, request).await {
+            Ok(snapshot) => {
+                info!(
+                    "RTC synchronized and verified: {}-{:02}-{:02} {:02}:{:02}:{:02} UTC, offset {} min",
+                    snapshot.datetime.year,
+                    snapshot.datetime.month,
+                    snapshot.datetime.day,
+                    snapshot.datetime.hour,
+                    snapshot.datetime.minute,
+                    snapshot.datetime.second,
+                    snapshot.utc_offset_minutes.unwrap_or(0)
+                );
+                channels.snapshot.signal(RtcEvent::Synced(snapshot));
+                // The clock was just read, so restart the interval rather
+                // than re-reading a moment later.
+                ticker.reset();
+            }
+            Err(_) => {
+                error!("PCF85063 synchronization or verification failed");
+                channels.snapshot.signal(RtcEvent::SyncFailed);
             }
         }
     }

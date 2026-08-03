@@ -4,15 +4,13 @@
 //! response headers of an ordinary request, so this makes the smallest one it
 //! can and throws the completion away — the headers are the payload.
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use anyhow::{Context, Result, anyhow};
 use claudial_icd::{UsageSnapshot, UsageStatus};
 use reqwest::header::HeaderMap;
 use serde_json::json;
 use tracing::debug;
 
-use super::{clamp_minutes, clamp_percent};
+use super::clamp_percent;
 use crate::credentials;
 
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
@@ -81,14 +79,6 @@ impl UsageClient {
     }
 }
 
-/// Seconds since the epoch, used to turn absolute reset stamps into countdowns.
-fn now_secs() -> f64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs_f64())
-        .unwrap_or(0.0)
-}
-
 fn header<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
     headers.get(name)?.to_str().ok()
 }
@@ -101,11 +91,13 @@ fn percent(headers: &HeaderMap, name: &str) -> u8 {
         .unwrap_or(0)
 }
 
-/// Reset stamps are absolute epoch seconds; the device shows time remaining.
-fn minutes_until(headers: &HeaderMap, name: &str) -> u16 {
+/// Preserve reset stamps as UTC epoch seconds; the device's RTC owns the
+/// countdown after the snapshot crosses the wire.
+fn reset_at(headers: &HeaderMap, name: &str) -> i64 {
     header(headers, name)
         .and_then(|raw| raw.parse::<f64>().ok())
-        .map(|reset_at| clamp_minutes((reset_at - now_secs()) / 60.0))
+        .filter(|reset_at| reset_at.is_finite() && *reset_at > 0.0)
+        .map(|reset_at| reset_at.round() as i64)
         .unwrap_or(0)
 }
 
@@ -127,9 +119,44 @@ fn snapshot_from_headers(headers: &HeaderMap) -> Result<UsageSnapshot> {
 
     Ok(UsageSnapshot {
         session_pct: percent(headers, "anthropic-ratelimit-unified-5h-utilization"),
-        session_reset_mins: minutes_until(headers, "anthropic-ratelimit-unified-5h-reset"),
+        session_reset_at: reset_at(headers, "anthropic-ratelimit-unified-5h-reset"),
         weekly_pct: percent(headers, "anthropic-ratelimit-unified-7d-utilization"),
-        weekly_reset_mins: minutes_until(headers, "anthropic-ratelimit-unified-7d-reset"),
+        weekly_reset_at: reset_at(headers, "anthropic-ratelimit-unified-7d-reset"),
         status,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use reqwest::header::{HeaderMap, HeaderValue};
+
+    use super::reset_at;
+
+    #[test]
+    fn preserves_absolute_reset_epoch() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "anthropic-ratelimit-unified-5h-reset",
+            HeaderValue::from_static("1785792600.4"),
+        );
+
+        assert_eq!(
+            reset_at(&headers, "anthropic-ratelimit-unified-5h-reset"),
+            1_785_792_600
+        );
+    }
+
+    #[test]
+    fn invalid_reset_epoch_is_unknown() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "anthropic-ratelimit-unified-5h-reset",
+            HeaderValue::from_static("not-a-timestamp"),
+        );
+
+        assert_eq!(
+            reset_at(&headers, "anthropic-ratelimit-unified-5h-reset"),
+            0
+        );
+    }
 }

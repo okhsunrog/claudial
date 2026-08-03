@@ -24,13 +24,12 @@ slint::include_modules!();
 /// often than any of the data on it changes, and on a page carrying the ring
 /// that repaint is the most expensive thing the firmware could do per second.
 pub fn update_clock(ui: &MainWindow, snapshot: RtcSnapshot) {
-    let datetime = snapshot.datetime;
-    if snapshot.clock_valid {
+    if let Some(datetime) = snapshot.local_datetime() {
         ui.set_clock(format!("{:02}:{:02}", datetime.hour, datetime.minute).into());
         ui.set_rtc_status("synced".into());
     } else {
         ui.set_clock("--:--".into());
-        ui.set_rtc_status("needs setting".into());
+        ui.set_rtc_status("needs host sync".into());
     }
 }
 

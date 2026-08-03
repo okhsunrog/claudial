@@ -9,10 +9,6 @@ name = "claudial-firmware"
 path = "./src/bin/main.rs"
 test = false
 
-[[test]]
-harness = false
-name    = "hello_test"
-
 [lib]
 test = false
 
@@ -103,14 +99,6 @@ slint = { git = "https://github.com/okhsunrog/slint.git", branch = "dirty-region
   "unsafe-single-threaded",
 ] }
 embassy-futures = "0.1.2"
-
-[dev-dependencies]
-embedded-test = { version = "0.7.1", features = [
-  "defmt",
-  "embassy-010",
-  "external-executor",
-  "xtensa-semihosting",
-] }
 
 # For fine tuning these settings, please refer to https://doc.rust-lang.org/cargo/reference/profiles.html
 [profile.dev]

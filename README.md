@@ -2,7 +2,8 @@
 
 Claudial is a desk instrument for Claude subscription usage. It shows the
 five-hour session and seven-day limits as two concentric dials, together with
-their reset times, current spending pace, battery state, and data freshness.
+their reset countdowns, current spending pace, battery state, and data
+freshness.
 
 It runs on the [Waveshare ESP32-S3-Touch-AMOLED-2.16][board-docs]. A host
 daemon reads usage from Claude and sends snapshots to the display over BLE.
@@ -62,8 +63,10 @@ CLAUDIAL_PROXY_PASSWORD=... \
 ```
 
 The daemon scans for a BLE peripheral named `Claudial`, connects to its Nordic
-UART Service, and publishes a fresh snapshot once a minute. Credentials remain
-on the host; they are never sent to or stored on the device.
+UART Service, and publishes a fresh snapshot once a minute. It also synchronizes
+the board's battery-backed RTC, which keeps the local clock and reset countdowns
+running between updates. Credentials remain on the host; they are never sent to
+or stored on the device.
 
 [board-docs]: https://docs.waveshare.com/ESP32-S3-Touch-AMOLED-2.16
 [clawdmeter]: https://github.com/HermannBjorgvin/Clawdmeter

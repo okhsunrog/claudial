@@ -13,12 +13,12 @@
 //! [claude-plasmoid]: https://github.com/okhsunrog/claude-plasmoid
 
 use anyhow::{Context, Result, anyhow};
-use chrono::{DateTime, Utc};
+use chrono::DateTime;
 use claudial_icd::{UsageSnapshot, UsageStatus};
 use serde::Deserialize;
 use tracing::{debug, warn};
 
-use super::{clamp_minutes, clamp_percent};
+use super::clamp_percent;
 
 const URL_VAR: &str = "CLAUDIAL_PROXY_URL";
 const USERNAME_VAR: &str = "CLAUDIAL_PROXY_USERNAME";
@@ -119,13 +119,11 @@ impl UsageLimit {
         self.utilization.map(clamp_percent).unwrap_or(0)
     }
 
-    fn reset_mins(&self) -> u16 {
+    fn reset_at(&self) -> i64 {
         self.resets_at
             .as_deref()
             .and_then(|raw| DateTime::parse_from_rfc3339(raw).ok())
-            .map(|at| {
-                clamp_minutes((at.with_timezone(&Utc) - Utc::now()).num_seconds() as f64 / 60.0)
-            })
+            .map(|at| at.timestamp())
             .unwrap_or(0)
     }
 }
@@ -157,9 +155,9 @@ impl SubscriptionUsage {
 
         UsageSnapshot {
             session_pct: five_hour.percent(),
-            session_reset_mins: five_hour.reset_mins(),
+            session_reset_at: five_hour.reset_at(),
             weekly_pct: seven_day.percent(),
-            weekly_reset_mins: seven_day.reset_mins(),
+            weekly_reset_at: seven_day.reset_at(),
             status,
         }
     }
@@ -174,7 +172,7 @@ mod tests {
     /// epoch seconds. Reading one as the other is silent and plausible.
     #[test]
     fn reads_percent_and_rfc3339() {
-        let resets_at = (Utc::now() + chrono::Duration::minutes(90)).to_rfc3339();
+        let resets_at = "2026-08-03T21:30:00Z";
         let raw = format!(
             r#"{{"five_hour":{{"utilization":21.4,"resets_at":"{resets_at}"}},
                  "seven_day":{{"utilization":80.0,"resets_at":null}}}}"#
@@ -186,8 +184,8 @@ mod tests {
 
         assert_eq!(snapshot.session_pct, 21);
         assert_eq!(snapshot.weekly_pct, 80);
-        assert_eq!(snapshot.session_reset_mins, 90);
-        assert_eq!(snapshot.weekly_reset_mins, 0);
+        assert_eq!(snapshot.session_reset_at, 1_785_792_600);
+        assert_eq!(snapshot.weekly_reset_at, 0);
         assert_eq!(snapshot.status, UsageStatus::Allowed);
     }
 

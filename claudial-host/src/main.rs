@@ -13,7 +13,8 @@ mod usage;
 use std::time::Duration;
 
 use anyhow::Result;
-use claudial_icd::UsageTopic;
+use chrono::{Local, Utc};
+use claudial_icd::{ClockSync, ClockSyncTopic, UsageTopic};
 use ergot::interface_manager::{InterfaceState, Profile};
 use tracing::{info, warn};
 
@@ -24,6 +25,7 @@ use crate::usage::UsageClient;
 /// (near-free) API request per poll, and the `proxy` backend would just be
 /// re-reading a cache that refreshes on its own schedule.
 const POLL_INTERVAL: Duration = Duration::from_secs(60);
+const CLOCK_SYNC_INTERVAL: i64 = 60 * 60;
 const SCAN_TIMEOUT: Duration = Duration::from_secs(30);
 const RETRY_DELAY: Duration = Duration::from_secs(5);
 
@@ -64,15 +66,40 @@ async fn session(
         return Err(e);
     }
 
+    let mut previous_clock_sync = None;
     while link_is_up(stack) {
+        let clock_sync = current_clock_sync();
+        let clock_due = previous_clock_sync.is_none_or(|previous: ClockSync| {
+            previous.utc_offset_minutes != clock_sync.utc_offset_minutes
+                || clock_sync
+                    .unix_seconds
+                    .saturating_sub(previous.unix_seconds)
+                    >= CLOCK_SYNC_INTERVAL
+        });
+        if clock_due {
+            match stack
+                .topics()
+                .broadcast::<ClockSyncTopic>(&clock_sync, None)
+            {
+                Ok(()) => {
+                    info!(
+                        "clock sync sent at {} UTC (offset {:+} min)",
+                        clock_sync.unix_seconds, clock_sync.utc_offset_minutes
+                    );
+                    previous_clock_sync = Some(clock_sync);
+                }
+                Err(e) => warn!("clock sync publish failed: {e:?}"),
+            }
+        }
+
         match usage.poll().await {
             Ok(snapshot) => match stack.topics().broadcast::<UsageTopic>(&snapshot, None) {
                 Ok(()) => info!(
-                    "session {}% (resets in {} min), weekly {}% (resets in {} min)",
+                    "session {}% (resets at {}), weekly {}% (resets at {})",
                     snapshot.session_pct,
-                    snapshot.session_reset_mins,
+                    snapshot.session_reset_at,
                     snapshot.weekly_pct,
-                    snapshot.weekly_reset_mins
+                    snapshot.weekly_reset_at
                 ),
                 Err(e) => warn!("publish failed: {e:?}"),
             },
@@ -83,6 +110,19 @@ async fn session(
 
     warn!("link went down");
     Ok(())
+}
+
+fn current_clock_sync() -> ClockSync {
+    let local = Local::now();
+    let offset_seconds = local.offset().local_minus_utc();
+    let offset_minutes = offset_seconds / 60;
+
+    ClockSync {
+        unix_seconds: local.with_timezone(&Utc).timestamp(),
+        // Chrono's local offset is bounded to a timezone-sized value, so this
+        // conversion can only fail for a broken platform implementation.
+        utc_offset_minutes: i16::try_from(offset_minutes).unwrap_or(0),
+    }
 }
 
 fn link_is_up(stack: &transport::Stack) -> bool {
