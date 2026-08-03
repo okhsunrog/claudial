@@ -1,7 +1,5 @@
 #![no_std]
 
-pub mod animation;
-pub mod animations;
 pub mod ble;
 pub mod ble_nus;
 pub mod board;

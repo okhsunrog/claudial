@@ -10,24 +10,21 @@
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::vec;
-use claudial_firmware::animation::Player;
-use claudial_firmware::animations::ANIMATIONS;
 use claudial_firmware::ble::{ble_task, usage_task};
 use claudial_firmware::board::{DISPLAY_HEIGHT, DISPLAY_SPI_MHZ, DISPLAY_WIDTH};
 use claudial_firmware::co5300::{self, Co5300, brightness_register};
 use claudial_firmware::events::{
-    BrightnessSignal, PmicChannels, PmicEvent, RtcChannels, RtcEvent, SpriteSignal, TouchChannels,
-    TouchState, UiChannels, UiEvent, UsageSignal, next_ui_event,
+    BrightnessSignal, PmicChannels, PmicEvent, RtcChannels, RtcEvent, TouchChannels, TouchState,
+    UiChannels, UiEvent, UsageSignal, next_ui_event,
 };
 use claudial_firmware::frame_stats::{FrameStats, FrameTiming};
 use claudial_firmware::pmic::PowerKey;
 use claudial_firmware::slint_platform::EspPlatform;
 use claudial_firmware::tasks::{SharedI2cBus, pmic_task, rtc_task, touch_task};
 use claudial_firmware::transport::{BLE_MTU, BLE_OUTQ, Stack};
-use claudial_firmware::ui::{
-    self, MainWindow, dispatch_touch_state, push_sprite_frame, update_rtc_display,
-};
+use claudial_firmware::ui::{self, MainWindow, dispatch_touch_state, push_history, update_clock};
 use claudial_icd::UsageStatus;
+use claudial_icd::history::History;
 use defmt::{error, info};
 use embassy_executor::Spawner;
 use embassy_sync::mutex::Mutex;
@@ -66,11 +63,17 @@ static TOUCH: TouchChannels = TouchChannels::new();
 static PMIC: PmicChannels = PmicChannels::new();
 static RTC: RtcChannels = RtcChannels::new();
 static BRIGHTNESS: BrightnessSignal = BrightnessSignal::new();
-static SPRITE_NEXT: SpriteSignal = SpriteSignal::new();
 static USAGE: UsageSignal = UsageSignal::new();
 
-/// Page index of the sprite screen in the Slint nav bar.
-const SPRITE_PAGE: i32 = 1;
+/// How long the panel stays at the brightness you chose before dimming.
+///
+/// This is a battery feature first: nobody is looking at a desk instrument
+/// most of the time. That it also spares the AMOLED is a bonus, not the
+/// reason — the dial is deliberately not shifted around or replaced by a
+/// screensaver, which would cost the readout the device exists to give.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+/// Dim, not off. The ring stays readable across a desk.
+const IDLE_BRIGHTNESS_PERCENT: u8 = 12;
 
 /// Render a reset countdown as `2h 05m`, or `--` when the host has nothing.
 fn format_reset(minutes: u16) -> alloc::string::String {
@@ -223,24 +226,21 @@ async fn main(spawner: Spawner) -> ! {
     let ui = MainWindow::new().unwrap();
     ui.set_ble_status("initialized".into());
     ui.set_brightness_percent(i32::from(DEFAULT_BRIGHTNESS_PERCENT));
-    ui::connect_callbacks(&ui, &BRIGHTNESS, &SPRITE_NEXT, &PMIC, &RTC);
+    ui::connect_callbacks(&ui, &BRIGHTNESS, &PMIC);
 
     let channels = UiChannels {
         touch: &TOUCH,
         pmic: &PMIC,
         rtc: &RTC,
         brightness: &BRIGHTNESS,
-        sprite_next: &SPRITE_NEXT,
         usage: &USAGE,
     };
 
-    let sprite_cells = ui::sprite_model();
-    ui.set_sprite_cells(sprite_cells.clone().into());
-    let mut sprite_index = 0;
-    let mut sprite = Player::new(ANIMATIONS[sprite_index]);
-    ui.set_sprite_name(sprite.animation().name.into());
-    push_sprite_frame(&sprite_cells, sprite.animation(), sprite.frame());
-    let mut sprite_deadline = Instant::now() + sprite.hold();
+    let history_cells = ui::history_model();
+    ui.set_usage_history(history_cells.clone().into());
+    let mut history = History::new();
+    let mut idle_deadline = Some(Instant::now() + IDLE_TIMEOUT);
+    let mut dimmed = false;
     let started_at = Instant::now();
     let mut displayed_second = u64::MAX;
     let mut rendered_frames = 0_u32;
@@ -251,6 +251,8 @@ async fn main(spawner: Spawner) -> ! {
     let mut rtc_ready = false;
     let mut application_ready_logged = false;
     let mut display_on = true;
+    // What the user asked for, which idle dimming must not overwrite: waking
+    // and undimming both restore this rather than whatever is on the panel.
     let mut current_brightness_percent = DEFAULT_BRIGHTNESS_PERCENT;
     let mut uptime_ticker = Ticker::every(Duration::from_secs(1));
 
@@ -315,15 +317,13 @@ async fn main(spawner: Spawner) -> ! {
         // Sleep until a peripheral reports in, the uptime second rolls over,
         // or an animation is due for its next step. Nothing is polled.
         let animation = slint::platform::duration_until_next_timer_update();
-        // Only run the sprite clock while its page is actually showing; off the
-        // page there is no deadline and the branch waits for a tap instead.
-        let active_sprite_deadline =
-            (display_on && ui.get_current_page() == SPRITE_PAGE).then_some(sprite_deadline);
+        // Nothing to count down to while the panel is off or already dim.
+        let active_idle_deadline = display_on.then_some(idle_deadline).flatten();
         let event = next_ui_event(
             &channels,
             &mut uptime_ticker,
             animation,
-            active_sprite_deadline,
+            active_idle_deadline,
         )
         .await;
 
@@ -374,6 +374,17 @@ async fn main(spawner: Spawner) -> ! {
             // Input is still drained while the panel is asleep, so the touch
             // task never blocks on a full channel, but it is not dispatched.
             UiEvent::Touch(state) if display_on => {
+                // Any contact counts as attention: undim and start the
+                // countdown again.
+                if dimmed
+                    && display
+                        .set_brightness(brightness_register(current_brightness_percent))
+                        .is_ok()
+                {
+                    dimmed = false;
+                }
+                idle_deadline = Some(Instant::now() + IDLE_TIMEOUT);
+
                 // A drag queues reports faster than a frame takes to draw, so
                 // dispatch everything already waiting before rendering. Without
                 // this the loop would render once per report instead of once
@@ -397,11 +408,8 @@ async fn main(spawner: Spawner) -> ! {
                 PmicEvent::Online(stats) => {
                     pmic_ready = true;
                     ui.set_pmic_status("AXP2101 online".into());
-                    ui.set_battery_level(if stats.battery_present {
-                        format!("{}%", stats.state_of_charge).into()
-                    } else {
-                        "--".into()
-                    });
+                    ui.set_battery_percent(i32::from(stats.state_of_charge));
+                    ui.set_battery_charging(stats.charging);
                     ui.set_battery_voltage(if stats.battery_present {
                         format!("{} mV", stats.battery_mv).into()
                     } else {
@@ -429,26 +437,20 @@ async fn main(spawner: Spawner) -> ! {
                 }
             },
             UiEvent::Rtc(event) => match event {
-                RtcEvent::Online(snapshot) => {
+                RtcEvent::Online(snapshot) | RtcEvent::Saved(snapshot) => {
                     rtc_ready = true;
-                    update_rtc_display(&ui, snapshot);
+                    update_clock(&ui, snapshot);
                 }
                 RtcEvent::NeedsSetting => {
                     rtc_ready = true;
-                    ui.set_rtc_clock_valid(false);
-                    ui.set_rtc_status("Set date and time".into());
-                }
-                RtcEvent::Saved(snapshot) => {
-                    rtc_ready = true;
-                    ui.set_rtc_edit_dirty(false);
-                    update_rtc_display(&ui, snapshot);
-                    ui.set_rtc_status("Time saved".into());
+                    ui.set_clock("--:--".into());
+                    ui.set_rtc_status("waiting for host".into());
                 }
                 RtcEvent::SaveFailed => {
-                    ui.set_rtc_status("Save failed".into());
+                    ui.set_rtc_status("set failed".into());
                 }
                 RtcEvent::Error => {
-                    ui.set_rtc_status("RTC unavailable".into());
+                    ui.set_rtc_status("unavailable".into());
                 }
             },
             UiEvent::Brightness(percent) => {
@@ -466,20 +468,26 @@ async fn main(spawner: Spawner) -> ! {
                     ui.set_uptime(format!("{elapsed_seconds} s").into());
                 }
             }
-            UiEvent::SpriteFrame => {
-                sprite.advance();
-                push_sprite_frame(&sprite_cells, sprite.animation(), sprite.frame());
-                sprite_deadline = Instant::now() + sprite.hold();
-            }
-            UiEvent::SpriteNext => {
-                sprite_index = (sprite_index + 1) % ANIMATIONS.len();
-                sprite.set_animation(ANIMATIONS[sprite_index]);
-                ui.set_sprite_name(sprite.animation().name.into());
-                push_sprite_frame(&sprite_cells, sprite.animation(), sprite.frame());
-                sprite_deadline = Instant::now() + sprite.hold();
-                info!("Sprite animation: {}", sprite.animation().name);
+            UiEvent::Idle => {
+                if display
+                    .set_brightness(brightness_register(IDLE_BRIGHTNESS_PERCENT))
+                    .is_ok()
+                {
+                    dimmed = true;
+                    info!("Panel dimmed after {} s idle", IDLE_TIMEOUT.as_secs());
+                }
+                // Dimmed already: nothing left to count down to until a touch
+                // restarts it.
+                idle_deadline = None;
             }
             UiEvent::Usage(snapshot) => {
+                history.push(snapshot.session_pct);
+                push_history(&history_cells, &history);
+                ui.set_usage_rate(match history.rate_per_hour() {
+                    Some(rate) => format!("{rate} %/h over the last half hour").into(),
+                    None => "measuring rate".into(),
+                });
+                ui.set_linked(true);
                 ui.set_usage_session(i32::from(snapshot.session_pct));
                 ui.set_usage_weekly(i32::from(snapshot.weekly_pct));
                 ui.set_usage_session_reset(format_reset(snapshot.session_reset_mins).into());

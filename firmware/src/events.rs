@@ -1,7 +1,7 @@
 //! Events flowing from the peripheral tasks to the UI loop, and the endpoints
 //! they travel over.
 
-use embassy_futures::select::{Either, Either4, select, select4};
+use embassy_futures::select::{Either4, select4};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
@@ -13,8 +13,6 @@ use crate::pmic::{PmicStats, PowerKey};
 use crate::rtc::{DateTime as RtcDateTime, Snapshot as RtcSnapshot};
 
 pub type BrightnessSignal = Signal<CriticalSectionRawMutex, u8>;
-/// Raised by the UI when the sprite page is tapped.
-pub type SpriteSignal = Signal<CriticalSectionRawMutex, ()>;
 /// Latest usage snapshot pushed by the host daemon.
 pub type UsageSignal = Signal<CriticalSectionRawMutex, UsageSnapshot>;
 
@@ -108,10 +106,8 @@ pub enum UiEvent {
     Brightness(u8),
     Uptime,
     Animation,
-    /// The current sprite frame has been held long enough.
-    SpriteFrame,
-    /// The user asked for the next sprite animation.
-    SpriteNext,
+    /// Nobody has touched the panel for a while; dim it.
+    Idle,
     /// The host pushed a fresh usage snapshot.
     Usage(UsageSnapshot),
 }
@@ -123,7 +119,6 @@ pub struct UiChannels {
     pub pmic: &'static PmicChannels,
     pub rtc: &'static RtcChannels,
     pub brightness: &'static BrightnessSignal,
-    pub sprite_next: &'static SpriteSignal,
     pub usage: &'static UsageSignal,
 }
 
@@ -148,14 +143,13 @@ pub async fn next_ui_event(
     channels: &UiChannels,
     uptime: &mut Ticker,
     animation: Option<core::time::Duration>,
-    sprite_deadline: Option<Instant>,
+    idle_deadline: Option<Instant>,
 ) -> UiEvent {
     let UiChannels {
         touch,
         pmic,
         rtc,
         brightness,
-        sprite_next,
         usage,
     } = channels;
     let peripherals = select4(
@@ -184,27 +178,22 @@ pub async fn next_ui_event(
         },
     );
 
-    // The sprite page is the only source with a data-dependent deadline. Keep
-    // it absolute: this future is recreated whenever any other event wins the
-    // select, and a relative timer would restart the frame hold every time.
-    // When the page is not showing there is no deadline, and only a tap can
-    // wake this branch.
-    let sprite = async {
-        match sprite_deadline {
-            Some(deadline) => match select(Timer::at(deadline), sprite_next.wait()).await {
-                Either::First(()) => UiEvent::SpriteFrame,
-                Either::Second(()) => UiEvent::SpriteNext,
-            },
-            None => {
-                sprite_next.wait().await;
-                UiEvent::SpriteNext
-            }
+    // The idle timeout is the one deadline that must be absolute. Every touch
+    // pushes it further out, and this future is rebuilt whenever any other
+    // event wins the select — a relative timer would restart the countdown on
+    // every uptime tick and the panel would never dim. Already dimmed means
+    // there is no deadline, so this branch just sleeps.
+    let idle = async {
+        match idle_deadline {
+            Some(deadline) => Timer::at(deadline).await,
+            None => core::future::pending::<()>().await,
         }
+        UiEvent::Idle
     };
 
     let usage = async { UiEvent::Usage(usage.wait().await) };
 
-    match select4(peripherals, rest, sprite, usage).await {
+    match select4(peripherals, rest, idle, usage).await {
         Either4::First(event) | Either4::Second(event) => match event {
             Either4::First(event)
             | Either4::Second(event)
