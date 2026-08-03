@@ -245,7 +245,9 @@ export component MainWindow inherits Window {
             opacity: battery-touch.pressed ? 0.75 : 1;
 
             BatteryIcon {
-                x: 8px;
+                // In the powered state, move the battery under the bolt so
+                // its white stroke overlaps the rounded right edge.
+                x: root.usb-connected ? 15px : 6px;
                 y: 5px;
                 percent: root.battery-percent;
                 powered: root.usb-connected;
