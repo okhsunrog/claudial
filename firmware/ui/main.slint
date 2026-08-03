@@ -1,221 +1,283 @@
-component MetricCard inherits Rectangle {
-    in property <string> title;
-    in property <string> value;
-    in property <string> detail: "";
-    in property <color> accent: #5de4c7;
+// The Claudial face.
+//
+// The dial is the point of the instrument, so it is the screen you get: two
+// concentric rings of dots, session outside and weekly inside, around the
+// numbers. Everything the board can also do — brightness, clock, power,
+// telemetry — is one tap away behind the gear and never in the way.
+//
+// Two rules shape the drawing, both from measured frame cost:
+//
+//   - Dots, not filled arcs. A conic-gradient ring is one 400 x 400 fill,
+//     about 160 000 pixels at ~0.6 us each. A ring of dots is a few thousand,
+//     and only the dots that actually changed state are repainted.
+//   - Nothing animated shares a screen with the rings. The sprite lives on its
+//     own page, so its dirty region never drags the dial along with it.
 
-    background: #0d141b;
-    border-color: #1d2a34;
-    border-width: 1px;
-    border-radius: 14px;
+global Palette {
+    out property <color> bg: #000000;
+    out property <color> ink: #f2ede7;
+    out property <color> dim: #7d746c;
+    out property <color> faint: #4a423c;
+    // Warm coral for the session window, amber for the weekly one: two warm
+    // hues that stay distinguishable on AMOLED black without either reading
+    // as an alarm until it actually is one.
+    out property <color> session: #d97757;
+    out property <color> weekly: #d9a441;
+    out property <color> danger: #e0534f;
+    out property <color> track: #241f1c;
+    out property <color> panel: #100d0c;
+    out property <color> panel-line: #2a2421;
+}
 
-    Text {
-        x: 14px;
-        y: 12px;
-        text: root.title;
-        color: #6f8292;
-        font-size: 12px;
-        font-weight: 600;
-    }
+// One ring of the dial.
+//
+// `lit` rounds up, so a window that has only just been touched still shows a
+// single lit dot rather than reading as untouched.
+component DotRing inherits Rectangle {
+    in property <int> count: 64;
+    in property <length> radius: 208px;
+    in property <length> dot: 12px;
+    in property <int> percent: 0;
+    in property <color> accent;
 
-    Text {
-        x: 14px;
-        y: 35px;
-        text: root.value;
-        color: root.accent;
-        font-size: 19px;
-        font-weight: 700;
-    }
+    property <float> lit: root.percent <= 0 ? 0 : Math.max(1, Math.ceil(root.count * root.percent / 100));
 
-    Text {
-        x: 14px;
-        y: 62px;
-        text: root.detail;
-        color: #526270;
-        font-size: 10px;
+    width: 100%;
+    height: 100%;
+
+    for i in root.count: Rectangle {
+        property <angle> a: -90deg + 360deg * i / root.count;
+        x: root.width / 2 + root.radius * Math.cos(self.a) - root.dot / 2;
+        y: root.height / 2 + root.radius * Math.sin(self.a) - root.dot / 2;
+        width: root.dot;
+        height: root.dot;
+        border-radius: root.dot / 2;
+        background: i < root.lit ? root.accent : Palette.track;
     }
 }
 
-component MenuCard inherits Rectangle {
-    in property <string> title;
-    in property <string> value;
-    in property <string> action;
-    in property <color> accent: #5de4c7;
-    callback clicked();
+// A small pill used for status, never for actions.
+component Chip inherits Rectangle {
+    in property <string> label;
+    in property <color> accent: Palette.dim;
+    in property <bool> lit: false;
 
-    background: menu-touch.pressed ? #14212b : #0d141b;
-    border-color: menu-touch.pressed ? root.accent : #1d2a34;
+    height: 26px;
+    width: text.width + 34px;
+    border-radius: 13px;
+    background: Palette.panel;
     border-width: 1px;
-    border-radius: 14px;
+    border-color: Palette.panel-line;
 
-    Text {
-        x: 14px;
-        y: 12px;
-        text: root.title;
-        color: #6f8292;
+    Rectangle {
+        x: 11px;
+        y: parent.height / 2 - 3px;
+        width: root.lit ? 6px : 0px;
+        height: 6px;
+        border-radius: 3px;
+        background: root.accent;
+    }
+
+    text := Text {
+        x: root.lit ? 23px : 15px;
+        text: root.label;
+        color: root.accent;
         font-size: 12px;
         font-weight: 600;
+        letter-spacing: 0.6px;
+        vertical-alignment: center;
+        height: parent.height;
     }
+}
 
-    Text {
-        x: 14px;
-        y: 35px;
-        text: root.value;
-        color: root.accent;
-        font-size: 18px;
-        font-weight: 700;
-    }
+// A round tap target. Used for the gear and the back arrow, which are the only
+// two controls that live outside a list.
+component RoundButton inherits Rectangle {
+    in property <string> glyph;
+    in property <color> accent: Palette.dim;
+    callback clicked();
 
-    Text {
-        x: 14px;
-        y: 61px;
-        text: root.action;
-        color: #526270;
-        font-size: 10px;
-    }
+    width: 40px;
+    height: 40px;
+    border-radius: 20px;
+    background: touch.pressed ? Palette.track : Palette.panel;
+    border-width: 1px;
+    border-color: Palette.panel-line;
 
-    Text {
-        x: root.width - 27px;
-        y: 32px;
-        text: ">";
-        color: root.accent;
-        font-size: 18px;
-        font-weight: 700;
-    }
-
-    menu-touch := TouchArea {
+    touch := TouchArea {
         clicked => {
             root.clicked();
         }
+    }
+
+    Text {
+        text: root.glyph;
+        color: root.accent;
+        font-size: 18px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        width: 100%;
+        height: 100%;
     }
 }
 
 component StepButton inherits Rectangle {
     in property <string> label;
-    in property <color> accent: #5de4c7;
+    in property <color> accent: Palette.session;
     callback clicked();
 
-    background: step-touch.pressed ? root.accent : #0d141b;
-    border-color: root.accent;
-    border-width: 1px;
-    border-radius: 14px;
+    width: 44px;
+    height: 40px;
+    border-radius: 12px;
+    background: touch.pressed ? root.accent : Palette.track;
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
 
     Text {
         text: root.label;
-        color: step-touch.pressed ? #06110e : root.accent;
+        color: touch.pressed ? Palette.bg : root.accent;
         font-size: 20px;
         font-weight: 700;
         horizontal-alignment: center;
         vertical-alignment: center;
+        width: 100%;
+        height: 100%;
     }
+}
 
-    step-touch := TouchArea {
+// A settings row: label on the left, value on the right, optional chevron.
+component SettingRow inherits Rectangle {
+    in property <string> label;
+    in property <string> value: "";
+    in property <bool> navigates: false;
+    in property <color> accent: Palette.ink;
+    callback clicked();
+
+    height: 56px;
+    border-radius: 14px;
+    background: touch.pressed ? Palette.track : Palette.panel;
+    border-width: 1px;
+    border-color: Palette.panel-line;
+
+    touch := TouchArea {
         clicked => {
             root.clicked();
         }
+    }
+
+    Text {
+        x: 18px;
+        text: root.label;
+        color: Palette.ink;
+        font-size: 16px;
+        vertical-alignment: center;
+        height: 100%;
+    }
+
+    Text {
+        x: parent.width - self.width - (root.navigates ? 34px : 18px);
+        text: root.value;
+        color: root.accent;
+        font-size: 15px;
+        vertical-alignment: center;
+        height: 100%;
+    }
+
+    if root.navigates: Text {
+        x: parent.width - 24px;
+        text: ">";
+        color: Palette.faint;
+        font-size: 16px;
+        vertical-alignment: center;
+        height: 100%;
+    }
+}
+
+// A read-only telemetry line.
+component InfoRow inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+
+    height: 34px;
+
+    Text {
+        x: 0px;
+        text: root.label;
+        color: Palette.dim;
+        font-size: 14px;
+        vertical-alignment: center;
+        height: 100%;
+    }
+
+    Text {
+        x: parent.width - self.width;
+        text: root.value;
+        color: Palette.ink;
+        font-size: 14px;
+        vertical-alignment: center;
+        height: 100%;
     }
 }
 
 component ValueStepper inherits Rectangle {
     in property <string> label;
     in property <string> value;
-    in property <color> accent: #5de4c7;
     callback step(int);
 
-    background: #0d141b;
-    border-color: #1d2a34;
-    border-width: 1px;
-    border-radius: 14px;
+    height: 40px;
 
     Text {
-        x: 38px;
-        y: 8px;
-        width: root.width - 76px;
+        x: 0px;
+        width: 46px;
         text: root.label;
-        color: #6f8292;
-        font-size: 10px;
-        font-weight: 600;
-        horizontal-alignment: center;
+        color: Palette.dim;
+        font-size: 13px;
+        vertical-alignment: center;
+        height: 100%;
     }
 
     Text {
-        x: 38px;
-        y: 27px;
-        width: root.width - 76px;
-        height: 34px;
+        x: 50px;
+        width: 54px;
         text: root.value;
-        color: root.accent;
-        font-size: 21px;
+        color: Palette.ink;
+        font-size: 20px;
         font-weight: 700;
-        horizontal-alignment: center;
         vertical-alignment: center;
+        height: 100%;
     }
 
     StepButton {
-        x: 6px;
-        y: 20px;
-        width: 32px;
-        height: 50px;
-        label: "−";
-        accent: root.accent;
+        x: 108px;
+        label: "-";
         clicked => {
             root.step(-1);
         }
     }
 
     StepButton {
-        x: root.width - 38px;
-        y: 20px;
-        width: 32px;
-        height: 50px;
+        x: 158px;
         label: "+";
-        accent: root.accent;
         clicked => {
             root.step(1);
         }
     }
 }
 
-component NavButton inherits Rectangle {
-    in property <string> label;
-    in property <bool> active;
-    callback clicked();
-
-    background: root.active ? #12372f : nav-touch.pressed ? #14212b : #080d12;
-    border-color: root.active ? #286c5b : #080d12;
-    border-width: 1px;
-    border-radius: 15px;
-
-    Text {
-        text: root.label;
-        color: root.active ? #8ff5dc : #687a89;
-        font-size: 11px;
-        font-weight: root.active ? 700 : 500;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-
-    nav-touch := TouchArea {
-        clicked => {
-            root.clicked();
-        }
-    }
-}
-
-// A palette-indexed sprite frame drawn as one rectangle per cell.
-//
-// Modelling cells as elements rather than as a single image is deliberate:
-// Slint derives its dirty region from the items that actually changed, so a
-// frame that only moves a few cells repaints — and uploads to the panel — only
-// those cells. Feeding one big image instead would invalidate the whole
-// element and cost a full-screen QSPI transfer on every frame.
+// Per-cell rectangles rather than one image: the software renderer then only
+// repaints the cells whose colour actually changed between frames.
 component SpriteGrid inherits Rectangle {
     in property <[color]> cells;
     in property <int> grid: 20;
-    in property <length> cell-size: 15px;
+    in property <length> cell-size: 16px;
 
     width: root.grid * root.cell-size;
-    height: root.grid * root.cell-size;
+    height: root.width;
 
     for cell[i] in root.cells: Rectangle {
         x: Math.mod(i, root.grid) * root.cell-size;
@@ -226,73 +288,17 @@ component SpriteGrid inherits Rectangle {
     }
 }
 
-// A labelled percentage bar. The fill is a plain Rectangle rather than an
-// image so a changing percentage dirties only the strip that moved.
-component UsageBar inherits Rectangle {
-    in property <string> label;
-    in property <int> percent;
-    in property <string> reset;
-    in property <color> accent: #5de4c7;
-
-    background: #0d141b;
-    border-color: #1d2a34;
-    border-width: 1px;
-    border-radius: 16px;
-
-    Text {
-        x: 18px;
-        y: 14px;
-        text: root.label;
-        color: #6f8292;
-        font-size: 12px;
-        font-weight: 600;
-    }
-
-    Text {
-        x: 18px;
-        y: 34px;
-        text: root.percent + "%";
-        color: root.accent;
-        font-size: 32px;
-        font-weight: 700;
-    }
-
-    Text {
-        x: root.width - 130px;
-        y: 40px;
-        width: 112px;
-        text: root.reset;
-        color: #526270;
-        font-size: 12px;
-        horizontal-alignment: right;
-    }
-
-    Rectangle {
-        x: 18px;
-        y: 82px;
-        width: root.width - 36px;
-        height: 10px;
-        border-radius: 5px;
-        background: #16222c;
-
-        Rectangle {
-            x: 0px;
-            width: parent.width * Math.clamp(root.percent, 0, 100) / 100;
-            height: parent.height;
-            border-radius: 5px;
-            background: root.accent;
-        }
-    }
-}
-
 export component MainWindow inherits Window {
+    // Usage — the reason the thing exists.
     in property <int> usage-session: 0;
     in property <int> usage-weekly: 0;
     in property <string> usage-session-reset: "--";
     in property <string> usage-weekly-reset: "--";
     in property <string> usage-status: "waiting for host";
+
     in property <[color]> sprite-cells;
     in property <string> sprite-name: "--";
+
     in property <string> uptime: "0 s";
     in property <string> ble-status: "initialized";
     in property <string> touch-status: "CST9220 starting";
@@ -315,8 +321,13 @@ export component MainWindow inherits Window {
     in-out property <int> rtc-edit-second: 0;
     in-out property <bool> rtc-edit-dirty: false;
     in-out property <int> brightness-percent: 80;
+
+    // 0 dial · 1 sprite · 2 settings · 3 clock · 4 system.
+    // The firmware only cares that 1 is the sprite, which is the one page that
+    // needs an animation deadline.
     in-out property <int> current-page: 0;
     in-out property <bool> show-power-menu: false;
+
     callback sprite-next();
     callback brightness-step(int);
     callback rtc-step(int, int);
@@ -324,739 +335,565 @@ export component MainWindow inherits Window {
     callback power-off();
     callback reboot();
 
+    // A window that has run out is the one thing worth shouting about.
+    property <color> session-accent: root.usage-session >= 100 ? Palette.danger : Palette.session;
+    property <color> weekly-accent: root.usage-weekly >= 100 ? Palette.danger : Palette.weekly;
+    property <bool> linked: root.usage-status != "waiting for host";
+
     width: 480px;
     height: 480px;
-    background: #000000;
+    background: Palette.bg;
+    title: "Claudial";
 
-    Rectangle {
-        x: 32px;
-        y: 25px;
-        width: 416px;
-        height: 54px;
-        background: #000000;
+    // --- Dial -------------------------------------------------------------
 
-        Text {
-            x: 0px;
-            y: 0px;
-            text: "WAVESHARE · ESP32-S3";
-            color: #5de4c7;
-            font-size: 12px;
-            font-weight: 700;
+    if root.current-page == 0: Rectangle {
+        width: 100%;
+        height: 100%;
+
+        DotRing {
+            count: 64;
+            radius: 208px;
+            dot: 12px;
+            percent: root.usage-session;
+            accent: root.session-accent;
         }
 
-        Text {
-            x: 0px;
-            y: 21px;
-            text: root.current-page == 0 ? "SYSTEM OVERVIEW" :
-                root.current-page == 1 ? "DISPLAY" :
-                root.current-page == 2 ? "POWER" :
-                root.current-page == 3 ? "RTC CLOCK" :
-                root.current-page == 4 ? "SPRITE" : "CLAUDE USAGE";
-            color: #f3f7fa;
-            font-size: 22px;
-            font-weight: 700;
+        DotRing {
+            count: 52;
+            radius: 178px;
+            dot: 9px;
+            percent: root.usage-weekly;
+            accent: root.weekly-accent;
         }
 
-        Rectangle {
-            x: 330px;
-            y: 7px;
-            width: 86px;
-            height: 30px;
-            background: #0d251e;
-            border-color: #1d5a48;
-            border-width: 1px;
-            border-radius: 15px;
-
-            Rectangle {
-                x: 13px;
-                y: 11px;
-                width: 8px;
-                height: 8px;
-                border-radius: 4px;
-                background: #5de4c7;
-            }
-
-            Text {
-                x: 28px;
-                text: "LIVE";
-                color: #8ff5dc;
-                font-size: 11px;
-                font-weight: 700;
-                vertical-alignment: center;
-            }
-        }
-    }
-
-    if root.current-page == 0 : Rectangle {
-        x: 28px;
-        y: 92px;
-        width: 424px;
-        height: 306px;
-        background: #000000;
-
-        Rectangle {
-            x: 0px;
-            y: 0px;
-            width: 424px;
-            height: 94px;
-            background: #0b1016;
-            border-color: #1a2731;
-            border-width: 1px;
-            border-radius: 16px;
-
-            Rectangle {
-                x: 16px;
-                y: 13px;
-                width: 68px;
-                height: 68px;
-                border-radius: 17px;
-                background: #5de4c7;
-
-                Text {
-                    text: "S3";
-                    color: #07110e;
-                    font-size: 26px;
-                    font-weight: 800;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-            }
-
-            Text {
-                x: 101px;
-                y: 15px;
-                text: "CO5300 + CST9220";
-                color: #f3f7fa;
-                font-size: 20px;
-                font-weight: 700;
-            }
-
-            Text {
-                x: 101px;
-                y: 46px;
-                text: "480 × 480 · QSPI 40 MHz";
-                color: #82aaff;
-                font-size: 13px;
-                font-weight: 600;
-            }
-
-            Text {
-                x: 101px;
-                y: 68px;
-                text: root.touch-status;
-                color: #687a89;
-                font-size: 11px;
-            }
-        }
-
-        MenuCard {
-            x: 0px;
-            y: 106px;
-            width: 206px;
-            height: 86px;
-            title: "DISPLAY";
-            value: root.brightness-percent + "%";
-            action: "Adjust brightness";
-            accent: #82aaff;
+        // Anywhere in the middle flips to the sprite, the way Clawdmeter's
+        // splash works. Declared before the gear so the gear keeps its corner.
+        TouchArea {
+            x: 120px;
+            y: 96px;
+            width: 240px;
+            height: 250px;
             clicked => {
                 root.current-page = 1;
             }
         }
 
-        MenuCard {
-            x: 218px;
-            y: 106px;
-            width: 206px;
-            height: 86px;
-            title: "POWER";
-            value: root.battery-level;
-            action: root.pmic-status;
-            accent: #ffcb6b;
+        Chip {
+            x: 240px - self.width / 2;
+            y: 112px;
+            label: root.linked ? "LINKED" : "NO HOST";
+            accent: root.linked ? Palette.session : Palette.faint;
+            lit: root.linked;
+        }
+
+        Text {
+            x: 0px;
+            y: 146px;
+            width: 480px;
+            height: 88px;
+            text: root.usage-session + "%";
+            color: root.session-accent;
+            font-size: 76px;
+            font-weight: 800;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        Text {
+            x: 0px;
+            y: 234px;
+            width: 480px;
+            text: "SESSION · " + root.usage-session-reset;
+            color: Palette.dim;
+            font-size: 15px;
+            letter-spacing: 0.8px;
+            horizontal-alignment: center;
+        }
+
+        Rectangle {
+            x: 170px;
+            y: 268px;
+            width: 140px;
+            height: 1px;
+            background: Palette.panel-line;
+        }
+
+        Text {
+            x: 0px;
+            y: 282px;
+            width: 480px;
+            height: 40px;
+            text: root.usage-weekly + "%";
+            color: root.weekly-accent;
+            font-size: 34px;
+            font-weight: 700;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        Text {
+            x: 0px;
+            y: 324px;
+            width: 480px;
+            text: "WEEKLY · " + root.usage-weekly-reset;
+            color: Palette.dim;
+            font-size: 13px;
+            letter-spacing: 0.8px;
+            horizontal-alignment: center;
+        }
+
+        // Deliberately no clock here. A ticking seconds field would repaint
+        // this page once a second, and with the rings on it that costs three
+        // times what the same repaint costs on a plain page — for a number
+        // this instrument is not about. The clock lives behind the gear.
+        Text {
+            x: 0px;
+            y: 352px;
+            width: 480px;
+            height: 30px;
+            text: root.battery-level;
+            color: Palette.faint;
+            font-size: 14px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        RoundButton {
+            x: 220px;
+            y: 392px;
+            glyph: "=";
             clicked => {
                 root.current-page = 2;
             }
         }
+    }
 
-        MenuCard {
+    // --- Sprite -----------------------------------------------------------
+
+    if root.current-page == 1: Rectangle {
+        width: 100%;
+        height: 100%;
+
+        Text {
             x: 0px;
-            y: 204px;
-            width: 206px;
-            height: 92px;
-            title: "RTC";
-            value: root.rtc-time;
-            action: root.rtc-clock-valid ? root.rtc-date : root.rtc-status;
-            accent: #c792ea;
+            y: 34px;
+            width: 480px;
+            text: root.sprite-name;
+            color: Palette.dim;
+            font-size: 13px;
+            letter-spacing: 1.2px;
+            horizontal-alignment: center;
+        }
+
+        // Tapping the sprite itself cycles the animation; the back arrow is
+        // the only way out, so neither gesture can be hit by accident.
+        sprite-touch := TouchArea {
+            x: 80px;
+            y: 66px;
+            width: 320px;
+            height: 320px;
+            clicked => {
+                root.sprite-next();
+            }
+
+            SpriteGrid {
+                cells: root.sprite-cells;
+                cell-size: 16px;
+            }
+        }
+
+        Text {
+            x: 0px;
+            y: 400px;
+            width: 480px;
+            text: root.usage-session + "%   ·   " + root.usage-weekly + "%";
+            color: Palette.dim;
+            font-size: 18px;
+            font-weight: 600;
+            horizontal-alignment: center;
+        }
+
+        RoundButton {
+            x: 40px;
+            y: 220px;
+            glyph: "<";
+            clicked => {
+                root.current-page = 0;
+            }
+        }
+    }
+
+    // --- Settings ---------------------------------------------------------
+
+    if root.current-page == 2: Rectangle {
+        width: 100%;
+        height: 100%;
+
+        Text {
+            x: 0px;
+            y: 62px;
+            width: 480px;
+            text: "SETTINGS";
+            color: Palette.dim;
+            font-size: 13px;
+            letter-spacing: 1.6px;
+            horizontal-alignment: center;
+        }
+
+        Rectangle {
+            x: 66px;
+            y: 96px;
+            width: 348px;
+            height: 56px;
+            border-radius: 14px;
+            background: Palette.panel;
+            border-width: 1px;
+            border-color: Palette.panel-line;
+
+            Text {
+                x: 18px;
+                text: "Brightness";
+                color: Palette.ink;
+                font-size: 16px;
+                vertical-alignment: center;
+                height: 100%;
+            }
+
+            Text {
+                x: 146px;
+                width: 54px;
+                text: root.brightness-percent + "%";
+                color: Palette.session;
+                font-size: 15px;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                height: 100%;
+            }
+
+            StepButton {
+                x: 212px;
+                y: 8px;
+                label: "-";
+                clicked => {
+                    root.brightness-step(-5);
+                }
+            }
+
+            StepButton {
+                x: 288px;
+                y: 8px;
+                label: "+";
+                clicked => {
+                    root.brightness-step(5);
+                }
+            }
+        }
+
+        SettingRow {
+            x: 66px;
+            y: 162px;
+            width: 348px;
+            label: "Clock";
+            value: root.rtc-clock-valid ? root.rtc-time : "not set";
+            accent: root.rtc-clock-valid ? Palette.dim : Palette.danger;
+            navigates: true;
             clicked => {
                 root.current-page = 3;
             }
         }
 
-        MetricCard {
-            x: 218px;
-            y: 204px;
-            width: 206px;
-            height: 92px;
-            title: "UPTIME";
+        SettingRow {
+            x: 66px;
+            y: 228px;
+            width: 348px;
+            label: "System";
             value: root.uptime;
-            detail: "Slint software renderer";
-            accent: #ffcb6b;
-        }
-    }
-
-    if root.current-page == 1 : Rectangle {
-        x: 28px;
-        y: 92px;
-        width: 424px;
-        height: 306px;
-        background: #000000;
-
-        Rectangle {
-            x: 0px;
-            y: 0px;
-            width: 424px;
-            height: 174px;
-            background: #0b1016;
-            border-color: #1a2731;
-            border-width: 1px;
-            border-radius: 16px;
-
-            Text {
-                x: 18px;
-                y: 16px;
-                text: "BRIGHTNESS";
-                color: #6f8292;
-                font-size: 12px;
-                font-weight: 600;
-            }
-
-            Text {
-                x: 18px;
-                y: 42px;
-                text: root.brightness-percent + "%";
-                color: #82aaff;
-                font-size: 44px;
-                font-weight: 800;
-            }
-
-            Text {
-                x: 296px;
-                y: 59px;
-                text: "AMOLED";
-                color: #687a89;
-                font-size: 12px;
-            }
-
-            Rectangle {
-                x: 18px;
-                y: 108px;
-                width: 388px;
-                height: 10px;
-                background: #18232d;
-                border-radius: 5px;
-
-                Rectangle {
-                    x: 0px;
-                    width: 388px * root.brightness-percent / 100;
-                    height: 10px;
-                    background: #82aaff;
-                    border-radius: 5px;
-                }
-            }
-
-        }
-
-        StepButton {
-            x: 0px;
-            y: 188px;
-            width: 132px;
-            height: 54px;
-            label: "− 10";
-            accent: #82aaff;
+            accent: Palette.dim;
+            navigates: true;
             clicked => {
-                root.brightness-step(-10);
+                root.current-page = 4;
             }
         }
 
-        Rectangle {
-            x: 144px;
-            y: 188px;
-            width: 136px;
-            height: 54px;
-            background: #0d141b;
-            border-color: #1d2a34;
-            border-width: 1px;
-            border-radius: 14px;
-
-            Text {
-                text: "5 — 100%";
-                color: #687a89;
-                font-size: 12px;
-                font-weight: 600;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-        }
-
-        StepButton {
-            x: 292px;
-            y: 188px;
-            width: 132px;
-            height: 54px;
-            label: "+ 10";
-            accent: #82aaff;
+        SettingRow {
+            x: 66px;
+            y: 294px;
+            width: 348px;
+            label: "Power";
+            value: root.power-source;
+            accent: Palette.dim;
+            navigates: true;
             clicked => {
-                root.brightness-step(10);
+                root.show-power-menu = true;
             }
         }
 
-    }
-
-    if root.current-page == 2 : Rectangle {
-        x: 28px;
-        y: 92px;
-        width: 424px;
-        height: 306px;
-        background: #000000;
-
-        Rectangle {
-            x: 0px;
-            y: 0px;
-            width: 424px;
-            height: 96px;
-            background: #0b1016;
-            border-color: #1a2731;
-            border-width: 1px;
-            border-radius: 16px;
-
-            Text {
-                x: 18px;
-                y: 13px;
-                text: "BATTERY";
-                color: #6f8292;
-                font-size: 12px;
-                font-weight: 600;
-            }
-
-            Text {
-                x: 18px;
-                y: 34px;
-                text: root.battery-level;
-                color: #ffcb6b;
-                font-size: 38px;
-                font-weight: 800;
-            }
-
-            Text {
-                x: 168px;
-                y: 31px;
-                text: root.power-source;
-                color: #f3f7fa;
-                font-size: 17px;
-                font-weight: 700;
-            }
-
-            Text {
-                x: 168px;
-                y: 60px;
-                text: root.pmic-status;
-                color: #687a89;
-                font-size: 11px;
-            }
-        }
-
-        MetricCard {
-            x: 0px;
-            y: 108px;
-            width: 206px;
-            height: 87px;
-            title: "BATTERY VOLTAGE";
-            value: root.battery-voltage;
-            detail: "AXP2101 ADC";
-            accent: #ffcb6b;
-        }
-
-        MetricCard {
-            x: 218px;
-            y: 108px;
-            width: 206px;
-            height: 87px;
-            title: "VBUS";
-            value: root.vbus-voltage;
-            detail: root.power-source;
-            accent: #82aaff;
-        }
-
-        MetricCard {
-            x: 0px;
-            y: 207px;
-            width: 206px;
-            height: 87px;
-            title: "SYSTEM VOLTAGE";
-            value: root.vsys-voltage;
-            detail: "VSYS rail";
-            accent: #5de4c7;
-        }
-
-        MetricCard {
-            x: 218px;
-            y: 207px;
-            width: 206px;
-            height: 87px;
-            title: "PMIC TEMPERATURE";
-            value: root.pmic-temperature;
-            detail: "die sensor";
-            accent: #c792ea;
-        }
-    }
-
-    if root.current-page == 3 : Rectangle {
-        x: 28px;
-        y: 92px;
-        width: 424px;
-        height: 306px;
-        background: #000000;
-
-        Rectangle {
-            x: 0px;
-            y: 0px;
-            width: 424px;
-            height: 70px;
-            background: #0b1016;
-            border-color: #1a2731;
-            border-width: 1px;
-            border-radius: 16px;
-
-            Text {
-                x: 18px;
-                y: 8px;
-                text: "CURRENT TIME";
-                color: #6f8292;
-                font-size: 10px;
-                font-weight: 600;
-            }
-
-            Text {
-                x: 18px;
-                y: 25px;
-                text: root.rtc-time;
-                color: root.rtc-clock-valid ? #c792ea : #687a89;
-                font-size: 30px;
-                font-weight: 800;
-            }
-
-            Text {
-                x: 234px;
-                y: 17px;
-                width: 172px;
-                text: root.rtc-date;
-                color: #f3f7fa;
-                font-size: 15px;
-                font-weight: 700;
-                horizontal-alignment: right;
-            }
-
-            Text {
-                x: 214px;
-                y: 43px;
-                width: 192px;
-                text: root.rtc-status;
-                color: root.rtc-edit-dirty ? #ffcb6b : #687a89;
-                font-size: 10px;
-                horizontal-alignment: right;
-            }
-        }
-
-        ValueStepper {
-            x: 0px;
-            y: 82px;
-            width: 136px;
-            height: 76px;
-            label: "YEAR";
-            value: "\{root.rtc-edit-year}";
-            accent: #c792ea;
-            step(delta) => {
-                root.rtc-step(0, delta);
-            }
-        }
-
-        ValueStepper {
-            x: 144px;
-            y: 82px;
-            width: 136px;
-            height: 76px;
-            label: "MONTH";
-            value: "\{root.rtc-edit-month}";
-            accent: #c792ea;
-            step(delta) => {
-                root.rtc-step(1, delta);
-            }
-        }
-
-        ValueStepper {
-            x: 288px;
-            y: 82px;
-            width: 136px;
-            height: 76px;
-            label: "DAY";
-            value: "\{root.rtc-edit-day}";
-            accent: #c792ea;
-            step(delta) => {
-                root.rtc-step(2, delta);
-            }
-        }
-
-        ValueStepper {
-            x: 0px;
-            y: 170px;
-            width: 136px;
-            height: 76px;
-            label: "HOUR";
-            value: "\{root.rtc-edit-hour}";
-            accent: #82aaff;
-            step(delta) => {
-                root.rtc-step(3, delta);
-            }
-        }
-
-        ValueStepper {
-            x: 144px;
-            y: 170px;
-            width: 136px;
-            height: 76px;
-            label: "MINUTE";
-            value: "\{root.rtc-edit-minute}";
-            accent: #82aaff;
-            step(delta) => {
-                root.rtc-step(4, delta);
-            }
-        }
-
-        ValueStepper {
-            x: 288px;
-            y: 170px;
-            width: 136px;
-            height: 76px;
-            label: "SECOND";
-            value: "\{root.rtc-edit-second}";
-            accent: #82aaff;
-            step(delta) => {
-                root.rtc-step(5, delta);
-            }
-        }
-
-        StepButton {
-            x: 0px;
-            y: 258px;
-            width: 424px;
-            height: 48px;
-            label: root.rtc-edit-dirty ? "SAVE TIME" : "TIME IS SAVED";
-            accent: root.rtc-edit-dirty ? #5de4c7 : #286c5b;
+        RoundButton {
+            x: 220px;
+            y: 386px;
+            glyph: "<";
             clicked => {
-                if root.rtc-edit-dirty {
-                    root.rtc-save();
-                }
+                root.current-page = 0;
             }
         }
     }
 
-    if root.current-page == 4 : Rectangle {
-        x: 28px;
-        y: 92px;
-        width: 424px;
-        height: 314px;
-        background: #000000;
+    // --- Clock ------------------------------------------------------------
 
-        SpriteGrid {
-            x: 62px;
-            y: 4px;
-            cells: root.sprite-cells;
-            cell-size: 15px;
-        }
-
-        TouchArea {
-            x: 62px;
-            y: 4px;
-            width: 300px;
-            height: 300px;
-            clicked => {
-                root.sprite-next();
-            }
-        }
+    if root.current-page == 3: Rectangle {
+        width: 100%;
+        height: 100%;
 
         Text {
             x: 0px;
-            y: 292px;
-            width: 424px;
-            text: root.sprite-name;
-            color: #5de4c7;
-            font-size: 12px;
+            y: 52px;
+            width: 480px;
+            text: root.rtc-date + "   " + root.rtc-time;
+            color: Palette.ink;
+            font-size: 19px;
             font-weight: 700;
             horizontal-alignment: center;
         }
-    }
-
-    if root.current-page == 5 : Rectangle {
-        x: 28px;
-        y: 92px;
-        width: 424px;
-        height: 314px;
-        background: #000000;
-
-        UsageBar {
-            x: 0px;
-            y: 0px;
-            width: 424px;
-            height: 106px;
-            label: "SESSION (5H WINDOW)";
-            percent: root.usage-session;
-            reset: root.usage-session-reset;
-            accent: #5de4c7;
-        }
-
-        UsageBar {
-            x: 0px;
-            y: 118px;
-            width: 424px;
-            height: 106px;
-            label: "WEEKLY";
-            percent: root.usage-weekly;
-            reset: root.usage-weekly-reset;
-            accent: #c792ea;
-        }
 
         Text {
             x: 0px;
-            y: 248px;
-            width: 424px;
-            text: root.usage-status;
-            color: #6f8292;
+            y: 78px;
+            width: 480px;
+            text: root.rtc-status;
+            color: root.rtc-edit-dirty ? Palette.session : Palette.dim;
             font-size: 13px;
             horizontal-alignment: center;
         }
-    }
 
-    Rectangle {
-        x: 36px;
-        y: 414px;
-        width: 408px;
-        height: 42px;
-        background: #080d12;
-        border-color: #16222c;
-        border-width: 1px;
-        border-radius: 21px;
+        ValueStepper {
+            x: 62px;
+            y: 112px;
+            width: 202px;
+            label: "YEAR";
+            value: root.rtc-edit-year;
+            step(d) => {
+                root.rtc-step(0, d);
+            }
+        }
 
-        HorizontalLayout {
-            padding: 5px;
-            spacing: 4px;
+        ValueStepper {
+            x: 62px;
+            y: 160px;
+            width: 202px;
+            label: "MON";
+            value: root.rtc-edit-month;
+            step(d) => {
+                root.rtc-step(1, d);
+            }
+        }
 
-            NavButton {
-                horizontal-stretch: 1;
-                label: "SYSTEM";
-                active: root.current-page == 0;
-                clicked => {
-                    root.current-page = 0;
-                }
+        ValueStepper {
+            x: 62px;
+            y: 208px;
+            width: 202px;
+            label: "DAY";
+            value: root.rtc-edit-day;
+            step(d) => {
+                root.rtc-step(2, d);
+            }
+        }
+
+        ValueStepper {
+            x: 62px;
+            y: 256px;
+            width: 202px;
+            label: "HOUR";
+            value: root.rtc-edit-hour;
+            step(d) => {
+                root.rtc-step(3, d);
+            }
+        }
+
+        ValueStepper {
+            x: 62px;
+            y: 304px;
+            width: 202px;
+            label: "MIN";
+            value: root.rtc-edit-minute;
+            step(d) => {
+                root.rtc-step(4, d);
+            }
+        }
+
+        ValueStepper {
+            x: 62px;
+            y: 352px;
+            width: 202px;
+            label: "SEC";
+            value: root.rtc-edit-second;
+            step(d) => {
+                root.rtc-step(5, d);
+            }
+        }
+
+        save-touch := TouchArea {
+            x: 288px;
+            y: 186px;
+            width: 130px;
+            height: 52px;
+            clicked => {
+                root.rtc-save();
             }
 
-            NavButton {
-                horizontal-stretch: 1;
-                label: "DISPLAY";
-                active: root.current-page == 1;
-                clicked => {
-                    root.current-page = 1;
+            Rectangle {
+                border-radius: 14px;
+                background: save-touch.pressed ? Palette.danger : Palette.session;
+
+                Text {
+                    text: "SAVE";
+                    color: Palette.bg;
+                    font-size: 15px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: 100%;
+                    height: 100%;
                 }
             }
+        }
 
-            NavButton {
-                horizontal-stretch: 1;
-                label: "POWER";
-                active: root.current-page == 2;
-                clicked => {
-                    root.current-page = 2;
-                }
-            }
-
-            NavButton {
-                horizontal-stretch: 1;
-                label: "RTC";
-                active: root.current-page == 3;
-                clicked => {
-                    root.current-page = 3;
-                }
-            }
-
-            NavButton {
-                horizontal-stretch: 1;
-                label: "SPRITE";
-                active: root.current-page == 4;
-                clicked => {
-                    root.current-page = 4;
-                }
-            }
-
-            NavButton {
-                horizontal-stretch: 1;
-                label: "USAGE";
-                active: root.current-page == 5;
-                clicked => {
-                    root.current-page = 5;
-                }
+        RoundButton {
+            x: 333px;
+            y: 262px;
+            glyph: "<";
+            clicked => {
+                root.current-page = 2;
             }
         }
     }
 
-    if root.show-power-menu : Rectangle {
-        x: 0px;
-        y: 0px;
+    // --- System -----------------------------------------------------------
+
+    if root.current-page == 4: Rectangle {
         width: 100%;
         height: 100%;
-        background: #000000d9;
 
-        power-menu-backdrop := TouchArea {
+        Text {
+            x: 0px;
+            y: 58px;
+            width: 480px;
+            text: "SYSTEM";
+            color: Palette.dim;
+            font-size: 13px;
+            letter-spacing: 1.6px;
+            horizontal-alignment: center;
+        }
+
+        Rectangle {
+            x: 74px;
+            y: 88px;
+            width: 332px;
+            height: 296px;
+            border-radius: 16px;
+            background: Palette.panel;
+            border-width: 1px;
+            border-color: Palette.panel-line;
+
+            VerticalLayout {
+                x: 18px;
+                y: 14px;
+                width: 296px;
+                spacing: 0px;
+
+                InfoRow {
+                    label: "Uptime";
+                    value: root.uptime;
+                }
+
+                InfoRow {
+                    label: "Host link";
+                    value: root.usage-status;
+                }
+
+                InfoRow {
+                    label: "BLE";
+                    value: root.ble-status;
+                }
+
+                InfoRow {
+                    label: "Touch";
+                    value: root.touch-status;
+                }
+
+                InfoRow {
+                    label: "PMIC";
+                    value: root.pmic-status;
+                }
+
+                InfoRow {
+                    label: "Battery";
+                    value: root.battery-level + "  " + root.battery-voltage;
+                }
+
+                InfoRow {
+                    label: "VBUS / VSYS";
+                    value: root.vbus-voltage + "  " + root.vsys-voltage;
+                }
+
+                InfoRow {
+                    label: "Die temp";
+                    value: root.pmic-temperature;
+                }
+            }
+        }
+
+        RoundButton {
+            x: 220px;
+            y: 396px;
+            glyph: "<";
+            clicked => {
+                root.current-page = 2;
+            }
+        }
+    }
+
+    // --- Power menu -------------------------------------------------------
+
+    if root.show-power-menu: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #000000e6;
+
+        TouchArea {
             clicked => {
                 root.show-power-menu = false;
             }
         }
 
         Rectangle {
-            x: 68px;
-            y: 98px;
-            width: 344px;
-            height: 284px;
-            background: #0b1016;
-            border-color: #1d2a34;
-            border-width: 1px;
+            x: 76px;
+            y: 108px;
+            width: 328px;
+            height: 264px;
             border-radius: 20px;
+            background: Palette.panel;
+            border-width: 1px;
+            border-color: Palette.panel-line;
 
-            // Keep taps inside the card from reaching the dismiss backdrop.
-            TouchArea {}
+            // Keeps taps inside the card from reaching the dismiss backdrop.
+            TouchArea { }
 
             Text {
-                x: 24px;
-                y: 22px;
-                width: 296px;
+                x: 0px;
+                y: 26px;
+                width: parent.width;
                 text: "POWER";
-                color: #5de4c7;
+                color: Palette.dim;
                 font-size: 12px;
-                font-weight: 700;
+                letter-spacing: 1.6px;
                 horizontal-alignment: center;
             }
 
-            Text {
+            power-off-touch := TouchArea {
                 x: 24px;
-                y: 45px;
-                width: 296px;
-                text: "Choose an action";
-                color: #f3f7fa;
-                font-size: 22px;
-                font-weight: 700;
-                horizontal-alignment: center;
-            }
-
-            power-off-button := TouchArea {
-                x: 24px;
-                y: 88px;
-                width: 296px;
+                y: 66px;
+                width: 280px;
                 height: 52px;
                 clicked => {
                     root.show-power-menu = false;
@@ -1064,24 +901,26 @@ export component MainWindow inherits Window {
                 }
 
                 Rectangle {
-                    background: power-off-button.pressed ? #8f273a : #c7354e;
                     border-radius: 14px;
+                    background: power-off-touch.pressed ? #8f2f2c : Palette.danger;
 
                     Text {
                         text: "POWER OFF";
-                        color: white;
+                        color: Palette.bg;
                         font-size: 14px;
                         font-weight: 700;
                         horizontal-alignment: center;
                         vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
                     }
                 }
             }
 
-            reboot-button := TouchArea {
+            reboot-touch := TouchArea {
                 x: 24px;
-                y: 152px;
-                width: 296px;
+                y: 130px;
+                width: 280px;
                 height: 52px;
                 clicked => {
                     root.show-power-menu = false;
@@ -1089,42 +928,46 @@ export component MainWindow inherits Window {
                 }
 
                 Rectangle {
-                    background: reboot-button.pressed ? #235d79 : #2f789b;
                     border-radius: 14px;
+                    background: reboot-touch.pressed ? #8c6a2a : Palette.weekly;
 
                     Text {
                         text: "RESTART";
-                        color: white;
+                        color: Palette.bg;
                         font-size: 14px;
                         font-weight: 700;
                         horizontal-alignment: center;
                         vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
                     }
                 }
             }
 
-            cancel-button := TouchArea {
+            cancel-touch := TouchArea {
                 x: 24px;
-                y: 216px;
-                width: 296px;
-                height: 44px;
+                y: 194px;
+                width: 280px;
+                height: 46px;
                 clicked => {
                     root.show-power-menu = false;
                 }
 
                 Rectangle {
-                    background: cancel-button.pressed ? #17242e : #0d141b;
-                    border-color: #1d2a34;
-                    border-width: 1px;
                     border-radius: 14px;
+                    background: cancel-touch.pressed ? Palette.track : Palette.bg;
+                    border-width: 1px;
+                    border-color: Palette.panel-line;
 
                     Text {
                         text: "CANCEL";
-                        color: #6f8292;
+                        color: Palette.dim;
                         font-size: 13px;
                         font-weight: 700;
                         horizontal-alignment: center;
                         vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
                     }
                 }
             }

@@ -70,7 +70,7 @@ static SPRITE_NEXT: SpriteSignal = SpriteSignal::new();
 static USAGE: UsageSignal = UsageSignal::new();
 
 /// Page index of the sprite screen in the Slint nav bar.
-const SPRITE_PAGE: i32 = 4;
+const SPRITE_PAGE: i32 = 1;
 
 /// Render a reset countdown as `2h 05m`, or `--` when the host has nothing.
 fn format_reset(minutes: u16) -> alloc::string::String {
