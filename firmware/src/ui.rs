@@ -18,6 +18,32 @@ use crate::rtc::Snapshot as RtcSnapshot;
 
 slint::include_modules!();
 
+/// Ignore the initial movement of the CST9220 contact centroid.
+///
+/// Slint's `Flickable` has its own 8 logical-pixel drag threshold, but the
+/// controller can move farther than that while a finger is merely settling on
+/// the glass. Holding the pointer at its press position until the raw contact
+/// crosses this slightly larger, board-specific threshold keeps taps from
+/// becoming scroll gestures.
+const TOUCH_DRAG_THRESHOLD_PHYSICAL_PX: f32 = 12.0;
+
+#[derive(Default)]
+pub struct TouchInput {
+    press_position: Option<slint::LogicalPosition>,
+    last_position: Option<slint::LogicalPosition>,
+    dragging: bool,
+}
+
+impl TouchInput {
+    pub fn is_pressed(&self) -> bool {
+        self.press_position.is_some()
+    }
+
+    pub fn is_dragging(&self) -> bool {
+        self.dragging
+    }
+}
+
 /// Push the minute-resolution clock into diagnostics.
 ///
 /// Hours and minutes only. Seconds would repaint the dial sixty times more
@@ -43,25 +69,42 @@ pub fn update_settings(ui: &MainWindow, settings: DisplaySettings) {
 
 pub fn dispatch_touch_state(
     window: &MinimalSoftwareWindow,
-    last_position: &mut Option<slint::LogicalPosition>,
+    input: &mut TouchInput,
     state: TouchState,
 ) {
     match state {
         TouchState::Pressed { x, y } => {
             let position =
                 PhysicalPosition::new(i32::from(x), i32::from(y)).to_logical(window.scale_factor());
-            let event = match last_position.replace(position) {
-                Some(previous) if previous != position => WindowEvent::PointerMoved { position },
-                Some(_) => return,
-                None => WindowEvent::PointerPressed {
+
+            let Some(press_position) = input.press_position else {
+                input.press_position = Some(position);
+                input.last_position = Some(position);
+                window.dispatch_event(WindowEvent::PointerPressed {
                     position,
                     button: PointerEventButton::Left,
-                },
+                });
+                return;
             };
-            window.dispatch_event(event);
+
+            if !input.dragging {
+                let threshold = TOUCH_DRAG_THRESHOLD_PHYSICAL_PX / window.scale_factor();
+                let delta_x = (position.x - press_position.x).abs();
+                let delta_y = (position.y - press_position.y).abs();
+                if delta_x <= threshold && delta_y <= threshold {
+                    return;
+                }
+                input.dragging = true;
+            }
+
+            if input.last_position.replace(position) != Some(position) {
+                window.dispatch_event(WindowEvent::PointerMoved { position });
+            }
         }
         TouchState::Released => {
-            if let Some(position) = last_position.take() {
+            input.press_position = None;
+            input.dragging = false;
+            if let Some(position) = input.last_position.take() {
                 window.dispatch_event(WindowEvent::PointerReleased {
                     position,
                     button: PointerEventButton::Left,

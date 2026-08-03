@@ -24,7 +24,7 @@ use claudial_firmware::slint_platform::EspPlatform;
 use claudial_firmware::tasks::{SharedI2cBus, pmic_task, rtc_task, touch_task};
 use claudial_firmware::transport::{BLE_MTU, BLE_OUTQ, Stack};
 use claudial_firmware::ui::{
-    self, MainWindow, dispatch_touch_state, update_clock, update_settings,
+    self, MainWindow, TouchInput, dispatch_touch_state, update_clock, update_settings,
 };
 use claudial_icd::pace::Pace;
 use claudial_icd::settings::DisplaySettings;
@@ -293,11 +293,11 @@ async fn main(spawner: Spawner) -> ! {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
-    // BLE can only allocate from internal RAM. Slint normally fits there too,
-    // but opening allocation-heavy overlays needs a larger contiguous block
-    // after the radio has fragmented the internal heaps. Keep PSRAM as the
-    // general allocator's fallback even though render_by_line no longer needs
-    // a full framebuffer.
+    // esp-radio exposes both general and internal-only allocation hooks. Keep
+    // the internal regions first so ordinary allocations prefer SRAM and an
+    // explicit Internal request can never use PSRAM. PSRAM remains the general
+    // allocator's fallback for larger contiguous allocations such as opening
+    // Slint overlays, even though render_by_line needs no full framebuffer.
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 73744);
     esp_alloc::heap_allocator!(size: 48 * 1024);
     esp_alloc::psram_allocator!(
@@ -444,7 +444,7 @@ async fn main(spawner: Spawner) -> ! {
     let mut displayed_minute = u64::MAX;
     let mut rendered_frames = 0_u32;
     let mut frame_stats = FrameStats::default();
-    let mut last_touch_position = None;
+    let mut touch_input = TouchInput::default();
     let mut touch_ready = false;
     let mut pmic_ready = false;
     let mut rtc_ready = false;
@@ -530,11 +530,7 @@ async fn main(spawner: Spawner) -> ! {
         match event {
             UiEvent::PowerKey(event) => match event {
                 PowerKey::Short if display_on => {
-                    dispatch_touch_state(
-                        &slint_window,
-                        &mut last_touch_position,
-                        TouchState::Released,
-                    );
+                    dispatch_touch_state(&slint_window, &mut touch_input, TouchState::Released);
                     ui.set_show_power_menu(false);
                     if display.sleep().is_ok() {
                         display_on = false;
@@ -601,22 +597,36 @@ async fn main(spawner: Spawner) -> ! {
                 }
                 idle_deadline = next_idle_deadline(display_settings, usb_connected);
 
-                // A drag queues reports faster than a frame takes to draw, so
-                // dispatch everything already waiting before rendering. Without
-                // this the loop would render once per report instead of once
-                // per batch, which is more work than the old polling version.
+                // Preserve pointer transitions and inspect every report until
+                // the hardware dead zone confirms a drag. Once dragging,
+                // coalesce consecutive moves to the newest coordinate. This
+                // gives Slint one fresh sample per UI cycle instead of a burst
+                // of stale coordinates carrying the same animation timestamp.
                 let mut pending = Some(state);
-                while let Some(state) = pending {
+                while let Some(mut state) = pending.take() {
+                    if touch_input.is_dragging() && matches!(state, TouchState::Pressed { .. }) {
+                        while let Ok(next) = TOUCH.events.try_receive() {
+                            match next {
+                                TouchState::Pressed { .. } => state = next,
+                                TouchState::Released => {
+                                    pending = Some(next);
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        pending = TOUCH.events.try_receive().ok();
+                    }
+
                     if let TouchState::Pressed { x, y } = state {
-                        if last_touch_position.is_none() {
+                        if !touch_input.is_pressed() {
                             info!("Touch down at ({}, {})", x, y);
                         }
                         ui.set_touch_status(format!("touch {x},{y}").into());
-                    } else if last_touch_position.is_some() {
+                    } else if touch_input.is_pressed() {
                         info!("Touch released");
                     }
-                    dispatch_touch_state(&slint_window, &mut last_touch_position, state);
-                    pending = TOUCH.events.try_receive().ok();
+                    dispatch_touch_state(&slint_window, &mut touch_input, state);
                 }
             }
             UiEvent::Touch(_) => {}
