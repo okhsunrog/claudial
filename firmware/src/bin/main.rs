@@ -74,6 +74,8 @@ static USAGE: UsageSignal = UsageSignal::new();
 const DATA_FRESHNESS_TIMEOUT: Duration = Duration::from_secs(150);
 /// Whole-percent usage staying unchanged this long is worth saying explicitly.
 const USAGE_UNCHANGED_SECONDS: u32 = 5 * 60;
+/// Coalesce a burst of settings taps into one append-only flash write.
+const SETTINGS_SAVE_DEBOUNCE: Duration = Duration::from_secs(2);
 
 /// Render a compact reset countdown, or `--` when the host has nothing.
 fn format_reset(minutes: u16) -> alloc::string::String {
@@ -232,7 +234,7 @@ fn next_idle_deadline(settings: DisplaySettings, usb_connected: bool) -> Option<
         .then(|| Instant::now() + Duration::from_secs(u64::from(settings.idle_timeout_seconds)))
 }
 
-fn persist_settings(
+async fn persist_settings(
     store: &mut Option<SettingsStore<'_>>,
     ui: &MainWindow,
     settings: DisplaySettings,
@@ -242,7 +244,9 @@ fn persist_settings(
         return;
     };
 
-    match store.save(settings) {
+    // The sequential-storage state machine is large and saving is rare. Keep
+    // it out of the permanently resident UI-loop future.
+    match Box::pin(store.save(settings)).await {
         Ok(true) => {
             info!("Display settings saved and verified");
             ui.set_settings_storage_status("saved".into());
@@ -318,14 +322,14 @@ async fn main(spawner: Spawner) -> ! {
     info!("Embassy initialized!");
 
     let (mut settings_store, mut display_settings, settings_storage_status) =
-        match SettingsStore::new(peripherals.FLASH) {
+        match Box::pin(SettingsStore::new(peripherals.FLASH)).await {
             Ok((store, Some(settings))) => {
                 info!("Loaded persisted display settings");
                 (Some(store), settings, "saved")
             }
             Ok((mut store, None)) => {
                 let defaults = DisplaySettings::default();
-                match store.save(defaults) {
+                match Box::pin(store.save(defaults)).await {
                     Ok(_) => {
                         info!("Persisted and verified default display settings");
                         (Some(store), defaults, "saved")
@@ -444,6 +448,7 @@ async fn main(spawner: Spawner) -> ! {
     let mut usb_connected = false;
     let mut last_usage_at = None;
     let mut idle_deadline = next_idle_deadline(display_settings, usb_connected);
+    let mut settings_save_deadline = None;
     let mut dimmed = false;
     let started_at = Instant::now();
     let mut displayed_minute = u64::MAX;
@@ -531,6 +536,7 @@ async fn main(spawner: Spawner) -> ! {
             &mut maintenance_ticker,
             animation,
             active_idle_deadline,
+            settings_save_deadline,
         )
         .await;
 
@@ -739,7 +745,8 @@ async fn main(spawner: Spawner) -> ! {
                     }
                     SettingsAction::Close => {
                         ui.set_show_settings(false);
-                        persist_settings(&mut settings_store, &ui, display_settings);
+                        persist_settings(&mut settings_store, &ui, display_settings).await;
+                        settings_save_deadline = None;
                         idle_deadline = next_idle_deadline(display_settings, usb_connected);
                     }
                     SettingsAction::BrightnessStep(direction) => {
@@ -764,11 +771,12 @@ async fn main(spawner: Spawner) -> ! {
                         settings_changed = true;
                     }
                     SettingsAction::PowerOff => {
-                        persist_settings(&mut settings_store, &ui, display_settings);
+                        persist_settings(&mut settings_store, &ui, display_settings).await;
+                        settings_save_deadline = None;
                         PMIC.power_off.signal(());
                     }
                     SettingsAction::Reboot => {
-                        persist_settings(&mut settings_store, &ui, display_settings);
+                        persist_settings(&mut settings_store, &ui, display_settings).await;
                         esp_hal::system::software_reset();
                     }
                 }
@@ -777,6 +785,7 @@ async fn main(spawner: Spawner) -> ! {
                     update_settings(&ui, display_settings);
                     if settings_store.is_some() {
                         ui.set_settings_storage_status("unsaved".into());
+                        settings_save_deadline = Some(Instant::now() + SETTINGS_SAVE_DEBOUNCE);
                     }
 
                     if normal_brightness_changed {
@@ -813,6 +822,10 @@ async fn main(spawner: Spawner) -> ! {
                         idle_deadline = next_idle_deadline(display_settings, usb_connected);
                     }
                 }
+            }
+            UiEvent::SaveSettings => {
+                persist_settings(&mut settings_store, &ui, display_settings).await;
+                settings_save_deadline = None;
             }
             UiEvent::Ble(state) => {
                 match state {

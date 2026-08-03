@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 // the time-aware arithmetic can be unit-tested on the host.
 pub mod pace;
 // Display policy is likewise platform-independent. Keeping its clamping and
-// persistent record format here gives the no_std firmware host-run tests.
+// versioned storage value here gives the no_std firmware host-run tests.
 pub mod settings;
 
 /// How the account's limits are currently behaving.

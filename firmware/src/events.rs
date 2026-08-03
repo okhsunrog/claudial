@@ -129,6 +129,8 @@ pub enum UiEvent {
     Animation,
     /// Nobody has touched the panel for a while; dim it.
     Idle,
+    /// A quiet period after the last edit elapsed; commit settings to flash.
+    SaveSettings,
     /// The host pushed a fresh usage snapshot.
     Usage(UsageSnapshot),
 }
@@ -166,6 +168,7 @@ pub async fn next_ui_event(
     maintenance: &mut Ticker,
     animation: Option<core::time::Duration>,
     idle_deadline: Option<Instant>,
+    settings_save_deadline: Option<Instant>,
 ) -> UiEvent {
     let UiChannels {
         touch,
@@ -213,6 +216,18 @@ pub async fn next_ui_event(
         }
         UiEvent::Idle
     };
+    let save_settings = async {
+        match settings_save_deadline {
+            Some(deadline) => Timer::at(deadline).await,
+            None => core::future::pending::<()>().await,
+        }
+        UiEvent::SaveSettings
+    };
+    let deadlines = async {
+        match select(idle, save_settings).await {
+            Either::First(event) | Either::Second(event) => event,
+        }
+    };
 
     let data = async {
         match select(ble.wait(), usage.wait()).await {
@@ -221,7 +236,7 @@ pub async fn next_ui_event(
         }
     };
 
-    match select4(peripherals, rest, idle, data).await {
+    match select4(peripherals, rest, deadlines, data).await {
         Either4::First(event) | Either4::Second(event) => match event {
             Either4::First(event)
             | Either4::Second(event)

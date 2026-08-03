@@ -1,18 +1,20 @@
-//! Display policy and its compact persistent representation.
+//! Display policy and its compact, versioned storage value.
 
 pub const MINIMUM_BRIGHTNESS_PERCENT: u8 = 5;
 pub const MAXIMUM_BRIGHTNESS_PERCENT: u8 = 100;
 pub const BRIGHTNESS_STEP_PERCENT: u8 = 5;
 pub const IDLE_TIMEOUT_OPTIONS_SECONDS: [u16; 6] = [30, 60, 120, 300, 600, 1800];
 
-const SETTINGS_MAGIC: [u8; 4] = *b"CLDS";
 const SETTINGS_FORMAT_VERSION: u8 = 1;
 const SETTINGS_FLAG_AUTO_DIM: u8 = 1 << 0;
 const SETTINGS_FLAG_DIM_ON_USB: u8 = 1 << 1;
 const SETTINGS_FLAGS_MASK: u8 = SETTINGS_FLAG_AUTO_DIM | SETTINGS_FLAG_DIM_ON_USB;
-const SETTINGS_CRC_OFFSET: usize = 16;
 
-pub const SETTINGS_RECORD_SIZE: usize = 32;
+/// Bytes stored as the value of the display-settings map entry.
+///
+/// `sequential-storage` supplies the record framing, CRC and wear levelling;
+/// this value only owns Claudial's schema version and data validation.
+pub const SETTINGS_VALUE_SIZE: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DisplaySettings {
@@ -78,57 +80,36 @@ impl DisplaySettings {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SettingsRecord {
-    pub settings: DisplaySettings,
-    pub sequence: u32,
-}
+pub fn encode_settings(settings: DisplaySettings) -> [u8; SETTINGS_VALUE_SIZE] {
+    debug_assert!(settings.valid());
 
-pub fn encode_record(record: SettingsRecord) -> [u8; SETTINGS_RECORD_SIZE] {
-    debug_assert!(record.settings.valid());
-
-    let mut bytes = [0xff; SETTINGS_RECORD_SIZE];
-    bytes[..4].copy_from_slice(&SETTINGS_MAGIC);
-    bytes[4] = SETTINGS_FORMAT_VERSION;
-    bytes[5] = (u8::from(record.settings.auto_dim) * SETTINGS_FLAG_AUTO_DIM)
-        | (u8::from(record.settings.dim_on_usb) * SETTINGS_FLAG_DIM_ON_USB);
-    bytes[6] = record.settings.brightness_percent;
-    bytes[7] = record.settings.dim_brightness_percent;
-    bytes[8..10].copy_from_slice(&record.settings.idle_timeout_seconds.to_le_bytes());
-    bytes[12..16].copy_from_slice(&record.sequence.to_le_bytes());
-    let crc = crc32(&bytes[..SETTINGS_CRC_OFFSET]);
-    bytes[SETTINGS_CRC_OFFSET..SETTINGS_CRC_OFFSET + 4].copy_from_slice(&crc.to_le_bytes());
+    let mut bytes = [0xff; SETTINGS_VALUE_SIZE];
+    bytes[0] = SETTINGS_FORMAT_VERSION;
+    bytes[1] = (u8::from(settings.auto_dim) * SETTINGS_FLAG_AUTO_DIM)
+        | (u8::from(settings.dim_on_usb) * SETTINGS_FLAG_DIM_ON_USB);
+    bytes[2] = settings.brightness_percent;
+    bytes[3] = settings.dim_brightness_percent;
+    bytes[4..6].copy_from_slice(&settings.idle_timeout_seconds.to_le_bytes());
     bytes
 }
 
-pub fn decode_record(bytes: &[u8; SETTINGS_RECORD_SIZE]) -> Option<SettingsRecord> {
-    if bytes[..4] != SETTINGS_MAGIC || bytes[4] != SETTINGS_FORMAT_VERSION {
+pub fn decode_settings(bytes: &[u8; SETTINGS_VALUE_SIZE]) -> Option<DisplaySettings> {
+    if bytes[0] != SETTINGS_FORMAT_VERSION {
         return None;
     }
-    let flags = bytes[5];
+    let flags = bytes[1];
     if flags & !SETTINGS_FLAGS_MASK != 0 {
-        return None;
-    }
-    let expected_crc = u32::from_le_bytes(
-        bytes[SETTINGS_CRC_OFFSET..SETTINGS_CRC_OFFSET + 4]
-            .try_into()
-            .ok()?,
-    );
-    if crc32(&bytes[..SETTINGS_CRC_OFFSET]) != expected_crc {
         return None;
     }
 
     let settings = DisplaySettings {
-        brightness_percent: bytes[6],
+        brightness_percent: bytes[2],
         auto_dim: flags & SETTINGS_FLAG_AUTO_DIM != 0,
         dim_on_usb: flags & SETTINGS_FLAG_DIM_ON_USB != 0,
-        idle_timeout_seconds: u16::from_le_bytes(bytes[8..10].try_into().ok()?),
-        dim_brightness_percent: bytes[7],
+        idle_timeout_seconds: u16::from_le_bytes(bytes[4..6].try_into().ok()?),
+        dim_brightness_percent: bytes[3],
     };
-    settings.valid().then_some(SettingsRecord {
-        settings,
-        sequence: u32::from_le_bytes(bytes[12..16].try_into().ok()?),
-    })
+    settings.valid().then_some(settings)
 }
 
 fn stepped_percent(percent: u8, direction: i8) -> u8 {
@@ -143,18 +124,6 @@ fn stepped_percent(percent: u8, direction: i8) -> u8 {
     } else {
         percent
     }
-}
-
-fn crc32(bytes: &[u8]) -> u32 {
-    let mut crc = u32::MAX;
-    for byte in bytes {
-        crc ^= u32::from(*byte);
-        for _ in 0..8 {
-            let polynomial = 0xedb8_8320 & (0_u32.wrapping_sub(crc & 1));
-            crc = (crc >> 1) ^ polynomial;
-        }
-    }
-    !crc
 }
 
 #[cfg(test)]
@@ -191,29 +160,20 @@ mod tests {
     }
 
     #[test]
-    fn record_round_trips_and_detects_corruption() {
-        let record = SettingsRecord {
-            settings: DisplaySettings::default(),
-            sequence: 42,
-        };
-        let mut encoded = encode_record(record);
-        assert_eq!(decode_record(&encoded), Some(record));
-
-        encoded[7] ^= 1;
-        assert_eq!(decode_record(&encoded), None);
+    fn storage_value_round_trips() {
+        let settings = DisplaySettings::default();
+        let encoded = encode_settings(settings);
+        assert_eq!(decode_settings(&encoded), Some(settings));
     }
 
     #[test]
-    fn record_rejects_unsupported_values_even_with_a_valid_crc() {
-        let record = SettingsRecord {
-            settings: DisplaySettings::default(),
-            sequence: 1,
-        };
-        let mut encoded = encode_record(record);
-        encoded[8..10].copy_from_slice(&17_u16.to_le_bytes());
-        let crc = crc32(&encoded[..SETTINGS_CRC_OFFSET]);
-        encoded[SETTINGS_CRC_OFFSET..SETTINGS_CRC_OFFSET + 4].copy_from_slice(&crc.to_le_bytes());
+    fn storage_value_rejects_unsupported_version_and_values() {
+        let mut encoded = encode_settings(DisplaySettings::default());
+        encoded[0] = SETTINGS_FORMAT_VERSION + 1;
+        assert_eq!(decode_settings(&encoded), None);
 
-        assert_eq!(decode_record(&encoded), None);
+        encoded = encode_settings(DisplaySettings::default());
+        encoded[4..6].copy_from_slice(&17_u16.to_le_bytes());
+        assert_eq!(decode_settings(&encoded), None);
     }
 }
