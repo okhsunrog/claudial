@@ -24,7 +24,7 @@ use claudial_firmware::slint_platform::EspPlatform;
 use claudial_firmware::tasks::{SharedI2cBus, pmic_task, rtc_task, touch_task};
 use claudial_firmware::transport::{BLE_MTU, BLE_OUTQ, Stack};
 use claudial_firmware::ui::{
-    self, MainWindow, TouchInput, dispatch_touch_state, update_clock, update_settings,
+    self, MainWindow, dispatch_touch_state, update_clock, update_settings,
 };
 use claudial_icd::pace::Pace;
 use claudial_icd::settings::DisplaySettings;
@@ -444,7 +444,7 @@ async fn main(spawner: Spawner) -> ! {
     let mut displayed_minute = u64::MAX;
     let mut rendered_frames = 0_u32;
     let mut frame_stats = FrameStats::default();
-    let mut touch_input = TouchInput::default();
+    let mut last_touch_position = None;
     let mut touch_ready = false;
     let mut pmic_ready = false;
     let mut rtc_ready = false;
@@ -538,7 +538,11 @@ async fn main(spawner: Spawner) -> ! {
         match event {
             UiEvent::PowerKey(event) => match event {
                 PowerKey::Short if display_on => {
-                    dispatch_touch_state(&slint_window, &mut touch_input, TouchState::Released);
+                    dispatch_touch_state(
+                        &slint_window,
+                        &mut last_touch_position,
+                        TouchState::Released,
+                    );
                     ui.set_show_power_menu(false);
                     if display.sleep().is_ok() {
                         display_on = false;
@@ -605,36 +609,22 @@ async fn main(spawner: Spawner) -> ! {
                 }
                 idle_deadline = next_idle_deadline(display_settings, usb_connected);
 
-                // Preserve pointer transitions and inspect every report until
-                // the hardware dead zone confirms a drag. Once dragging,
-                // coalesce consecutive moves to the newest coordinate. This
-                // gives Slint one fresh sample per UI cycle instead of a burst
-                // of stale coordinates carrying the same animation timestamp.
+                // A drag queues reports faster than a frame takes to draw, so
+                // dispatch everything already waiting before rendering. Without
+                // this the loop would render once per report instead of once
+                // per batch, which is more work than the old polling version.
                 let mut pending = Some(state);
-                while let Some(mut state) = pending.take() {
-                    if touch_input.is_dragging() && matches!(state, TouchState::Pressed { .. }) {
-                        while let Ok(next) = TOUCH.events.try_receive() {
-                            match next {
-                                TouchState::Pressed { .. } => state = next,
-                                TouchState::Released => {
-                                    pending = Some(next);
-                                    break;
-                                }
-                            }
-                        }
-                    } else {
-                        pending = TOUCH.events.try_receive().ok();
-                    }
-
+                while let Some(state) = pending {
                     if let TouchState::Pressed { x, y } = state {
-                        if !touch_input.is_pressed() {
+                        if last_touch_position.is_none() {
                             info!("Touch down at ({}, {})", x, y);
                         }
                         ui.set_touch_status(format!("touch {x},{y}").into());
-                    } else if touch_input.is_pressed() {
+                    } else if last_touch_position.is_some() {
                         info!("Touch released");
                     }
-                    dispatch_touch_state(&slint_window, &mut touch_input, state);
+                    dispatch_touch_state(&slint_window, &mut last_touch_position, state);
+                    pending = TOUCH.events.try_receive().ok();
                 }
             }
             UiEvent::Touch(_) => {}
