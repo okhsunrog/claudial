@@ -73,15 +73,25 @@ component BatteryIcon inherits Rectangle {
         height: 100%;
         border-radius: 10px;
         background: root.shell;
-        clip: true;
 
+        // Reveal a full-size rounded battery through a rectangular viewport.
+        // A narrow rounded fill changes curvature at low percentages, and
+        // software rendering cannot clip it to the parent's rounded outline.
         Rectangle {
             x: 0px;
             y: 0px;
             width: root.known ? Math.max(0, Math.min(100, root.percent)) * parent.width / 100 : 0px;
             height: 100%;
-            border-radius: 10px;
-            background: root.fill;
+            clip: true;
+
+            Rectangle {
+                x: 0px;
+                y: 0px;
+                width: 62px;
+                height: 30px;
+                border-radius: 10px;
+                background: root.fill;
+            }
         }
 
         Text {

@@ -92,10 +92,9 @@ static_cell      = "2.1.1"
 bytemuck         = "1.25.0"
 embedded-hal     = "1.0"
 time             = { version = "0.3.47", default-features = false }
-# Slint is taken from the branch behind slint-ui/slint#12656, which adds the
-# dirty-region alignment API the CO5300 needs. Switch back to crates.io once it
-# lands in a release. Cargo.lock pins the exact commit.
-slint = { git = "https://github.com/okhsunrog/slint.git", branch = "dirty-region-alignment", default-features = false, features = [
+# The CO5300 renderer uses the dirty-region alignment API currently available
+# on Slint's upstream development branch. Cargo.lock pins the exact commit.
+slint = { git = "https://github.com/slint-ui/slint.git", branch = "master", default-features = false, features = [
   "compat-1-2",
   "libm",
   "renderer-software",
@@ -116,4 +115,4 @@ lto           = 'fat'
 opt-level     = 's'
 
 [build-dependencies]
-slint-build = { git = "https://github.com/okhsunrog/slint.git", branch = "dirty-region-alignment" }
+slint-build = { git = "https://github.com/slint-ui/slint.git", branch = "master" }

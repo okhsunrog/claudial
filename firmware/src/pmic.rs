@@ -3,8 +3,8 @@
 //! The AXP2101 shares the board's I2C bus with the CST9220 touch controller.
 //! Unlike the M5Stack Core2, display brightness is not supplied by a PMIC LDO:
 //! it is controlled by the CO5300's `0x51` command. This module deliberately
-//! avoids changing board-specific power rails and only enables battery
-//! detection plus the ADC channels used for telemetry.
+//! avoids changing board-specific power rails. Charging is configured for
+//! the installed 1000mAh, 4.2V cell at 500mA (0.5C).
 
 use axp2101_dd::{AdcChannel, Axp2101Async, AxpError, AxpInterface};
 
@@ -42,6 +42,41 @@ where
     if chip_id != 0x4a && chip_id != 0x47 {
         defmt::warn!("Unexpected AXP2101 chip ID: 0x{:02X}", chip_id);
     }
+
+    // Apply the installed cell's charging policy on every boot, including after
+    // a PMIC power cycle. Leave precharge, termination and protections intact.
+    axp.set_battery_charge_voltage(axp2101_dd::ChargeVoltageLimit::V42)
+        .await?;
+    axp.set_battery_charge_current(axp2101_dd::FastChargeCurrentLimit::Ma500)
+        .await?;
+
+    // Read back the applied limits; other settings may survive an MCU reset.
+    let charge = axp.ll.fast_charge_current_config().read_async().await?;
+    let precharge = axp.ll.precharge_current_config().read_async().await?;
+    let voltage = axp.ll.charge_voltage_config().read_async().await?;
+    let input = axp.ll.input_current_limit().read_async().await?;
+    let vindpm = axp.ll.vindpm_config().read_async().await?;
+    let thermal = axp.ll.thermal_regulation_threshold().read_async().await?;
+    defmt::info!(
+        "AXP2101 charge limits: CC={} precharge={} voltage={} input={} VINDPM={} thermal={}",
+        charge.fast_charge_current(),
+        precharge.precharge_current(),
+        voltage.charge_voltage(),
+        input.current_limit(),
+        vindpm.vindpm_threshold(),
+        thermal.tregu_thld(),
+    );
+    let power = axp.ll.power_status().read_async().await?;
+    let system = axp.ll.system_status().read_async().await?;
+    let jeita = axp.ll.jeita_enable().read_async().await?;
+    defmt::info!(
+        "AXP2101 charge status: phase={} thermal-limited={} input-limited={} VINDPM-active={} JEITA={}",
+        system.charging_status(),
+        power.thermal_regulation_active(),
+        power.current_limit_active(),
+        system.vindpm_active(),
+        jeita.jeita_en(),
+    );
 
     // Require a two-second hold to power on from the PMIC's off state, report
     // a long press after 2.5 seconds while running, and retain a 10-second
