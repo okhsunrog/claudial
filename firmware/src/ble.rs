@@ -25,6 +25,8 @@ use claudial_icd::{ClockSyncTopic, UsageTopic};
 const CONNECTIONS_MAX: usize = 1;
 const L2CAP_CHANNELS_MAX: usize = 1;
 
+type BleController = ExternalController<BleConnector<'static>, CONNECTIONS_MAX>;
+
 /// Advertised name. The host daemon looks for this.
 const DEVICE_NAME: &str = "Claudial";
 
@@ -80,20 +82,18 @@ pub async fn ble_task(
     connector: BleConnector<'static>,
     state: &'static BleSignal,
 ) {
-    let controller = ExternalController::<_, CONNECTIONS_MAX>::new(connector);
+    let controller = BleController::new(connector);
 
     static RESOURCES: StaticCell<
-        HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX>,
+        HostResources<BleController, DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX>,
     > = StaticCell::new();
     let resources = RESOURCES.init(HostResources::new());
 
     let host = trouble_host::new(controller, resources)
-        .set_random_address(Address::random(DEVICE_ADDRESS));
-    let Host {
-        mut peripheral,
-        runner,
-        ..
-    } = host.build();
+        .set_random_address(Address::random(DEVICE_ADDRESS))
+        .build();
+    let runner = host.runner();
+    let mut peripheral = host.peripheral();
 
     let Ok(server) = NusServer::new_with_config(GapConfig::Peripheral(PeripheralConfig {
         name: DEVICE_NAME,
@@ -204,7 +204,7 @@ async fn connection_task<P: PacketPool>(
                 if let GattEvent::Write(ref write) = event
                     && write.handle() == rx_handle
                 {
-                    processor.process_frame(write.data(), &stack, ());
+                    write.with_data(|_, data| processor.process_frame(data, &stack, ()));
                 }
                 match event.accept() {
                     Ok(reply) => reply.send().await,
@@ -215,7 +215,7 @@ async fn connection_task<P: PacketPool>(
             Either::Second(grant) => {
                 let frame: heapless::Vec<u8, NUS_MAX_PAYLOAD> =
                     heapless::Vec::from_slice(&grant).unwrap_or_default();
-                let failed = tx.notify(connection, &frame).await.is_err();
+                let failed = tx.notify(connection, &frame, false).await.is_err();
                 grant.release();
                 if failed {
                     warn!("[ble] notify failed, dropping connection");

@@ -340,7 +340,7 @@ impl<'d> Co5300<'d> {
         transmit_buffer.set_length(byte_len);
         self.chip_select.set_low();
 
-        match spi.half_duplex_write(
+        match spi.half_duplex_write_buffer(
             DataMode::Quad,
             Command::_8Bit(QSPI_WRITE_PIXELS, DataMode::Single),
             Address::_24Bit(QSPI_MEMORY_CONTINUE_ADDRESS, DataMode::Single),
@@ -390,7 +390,7 @@ impl<'d> Co5300<'d> {
         let mut transmit_buffer = self.transmit_buffer.take().ok_or(Error::MissingResource)?;
         transmit_buffer.fill(parameters);
         self.chip_select.set_low();
-        let result = spi.half_duplex_write(
+        let result = spi.half_duplex_write_buffer(
             DataMode::Single,
             Command::_8Bit(QSPI_WRITE_COMMAND, DataMode::Single),
             Address::_24Bit(u32::from(command) << 8, DataMode::Single),

@@ -9,7 +9,6 @@ use claudial_icd::settings::{
     DisplaySettings, SETTINGS_VALUE_SIZE, decode_settings, encode_settings,
 };
 use embassy_embedded_hal::adapter::{BlockingAsync, YieldingAsync};
-use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
 use esp_bootloader_esp_idf::partitions::{
     DataPartitionSubType, PARTITION_TABLE_MAX_LEN, PartitionType, read_partition_table,
 };

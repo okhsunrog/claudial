@@ -9,7 +9,7 @@ use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_futures::select::{Either, select};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
-use embassy_time::{Duration, Instant, Ticker, Timer};
+use embassy_time::{Delay, Duration, Instant, Ticker, Timer};
 use esp_hal::gpio::{Input, Output};
 use esp_hal::i2c::master::I2c;
 
@@ -41,14 +41,10 @@ pub async fn touch_task(
     i2c_bus: &'static SharedI2cBus,
     channels: &'static TouchChannels,
     mut interrupt: Input<'static>,
-    mut reset: Output<'static>,
+    reset: Output<'static>,
 ) {
-    reset.set_low();
-    Timer::after(Duration::from_millis(10)).await;
-    reset.set_high();
-    Timer::after(Duration::from_millis(30)).await;
-
-    let mut touch = CST92xx::new(I2cDevice::new(i2c_bus));
+    // init() pulses reset and waits out the controller's boot time itself.
+    let mut touch = CST92xx::new(I2cDevice::new(i2c_bus), Delay).with_reset(reset);
     if touch.init().await.is_err() {
         error!("CST92xx initialization failed");
         channels.ready.signal(false);

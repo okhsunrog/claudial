@@ -17,12 +17,12 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 clap = { version = "4", features = ["derive", "env"] }
 # The upstream bluest lacks fixes this depends on; same fork oxifoc uses.
 bluest = { git = "https://github.com/okhsunrog/bluest", rev = "9cb9dbcad63d7d2ffe18a20f87b7ffe1cb670537", features = ["unstable"] }
-reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json", "http2", "charset"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "http2", "charset"] }
 # The Claude Code source reads its rotating OAuth credential from disk.
 serde_json = "1.0.151"
-dirs = "6.0.0"
+dirs = "7.0.0"
 # The claude-proxy source reuses credentials already stored by claude-plasmoid.
-zbus = { version = "5.14.0", features = ["blocking"] }
+zbus = { version = "5.19.0", features = ["blocking"] }
 # Used for wall-clock sync and parsing claude-proxy's RFC 3339 reset times.
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 

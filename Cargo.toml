@@ -26,7 +26,7 @@ unused_async = "warn"
 claudial-icd = { path = "claudial-icd" }
 # Pinned to a rev for reproducible builds, matching how oxifoc consumes ergot.
 # Bump here and in firmware/Cargo.toml together, then refresh both lockfiles.
-ergot = { git = "https://github.com/okhsunrog/ergot", rev = "8d7db27e030564a048eb16c90080ae6730d14e11" }
+ergot = { git = "https://github.com/okhsunrog/ergot", rev = "d42d38a6887c1a4807a9351e177879ec30e9deb0" }
 postcard-schema = { version = "0.2.5", features = ["derive"] }
 serde = { version = "1", default-features = false, features = ["derive"] }
 
