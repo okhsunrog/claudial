@@ -41,6 +41,8 @@ const POLL_INTERVAL: Duration = Duration::from_secs(60);
 const CLOCK_SYNC_INTERVAL: i64 = 60 * 60;
 const SCAN_TIMEOUT: Duration = Duration::from_secs(30);
 const RETRY_DELAY: Duration = Duration::from_secs(5);
+/// How often a sleeping session checks whether the link is still up.
+const LINK_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -120,11 +122,21 @@ async fn session(
             },
             Err(e) => warn!("{e:#}"),
         }
-        tokio::time::sleep(POLL_INTERVAL).await;
+        sleep_while_up(stack, POLL_INTERVAL).await;
     }
 
     warn!("link went down");
     Ok(())
+}
+
+/// Sleep for `duration`, but return early once the link drops, so a device
+/// that reboots is reconnected within seconds rather than at the next poll.
+async fn sleep_while_up(stack: &transport::Stack, duration: Duration) {
+    let deadline = tokio::time::Instant::now() + duration;
+    while link_is_up(stack) && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep_until(deadline.min(tokio::time::Instant::now() + LINK_CHECK_INTERVAL))
+            .await;
+    }
 }
 
 fn current_clock_sync() -> ClockSync {

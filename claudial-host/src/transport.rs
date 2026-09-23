@@ -9,7 +9,7 @@
 //! would leave neither able to assign a net.
 
 use anyhow::{Context, Result, anyhow};
-use bluest::{Adapter, Characteristic, Device, Uuid};
+use bluest::{Adapter, Characteristic, ConnectionEvent, Device, Uuid};
 use ergot::interface_manager::profiles::direct_edge::{
     CENTRAL_NODE_ID, DirectEdge, EdgeFrameProcessor,
 };
@@ -186,6 +186,12 @@ pub async fn connect(
         );
     });
 
+    let watch_stack = stack.clone();
+    let watch_device = device.clone();
+    workers.push(tokio::spawn(async move {
+        link_watcher(watch_stack, adapter, watch_device).await;
+    }));
+
     let rx_stack = stack.clone();
     workers.push(tokio::spawn(async move {
         match tx_char.notify().await {
@@ -202,6 +208,28 @@ pub async fn connect(
 
     info!("NUS link up (net {NET_ID})");
     Ok(())
+}
+
+/// Take the link down as soon as BlueZ reports the device gone.
+///
+/// The pumps only notice a drop when they next touch the link, and the tx pump
+/// only writes once per poll, so a device that reboots would otherwise sit
+/// disconnected for up to a whole poll interval before anyone reconnects.
+async fn link_watcher(stack: Stack, adapter: Adapter, device: Device) {
+    let mut events = match adapter.device_connection_events(&device).await {
+        Ok(events) => events,
+        Err(e) => {
+            warn!("cannot watch the connection state: {e:?}");
+            return;
+        }
+    };
+    while let Some(event) = events.next().await {
+        if event == ConnectionEvent::Disconnected {
+            info!("device disconnected");
+            mark_down(&stack);
+            return;
+        }
+    }
 }
 
 /// Feed device notifications into the stack.
@@ -235,7 +263,8 @@ async fn rx_worker(
 /// Take the interface down so the caller's `link_is_up` check fails and the
 /// session is retried.
 ///
-/// Both pumps do this, because either can be the one to notice. A dropped link
+/// Both pumps and the link watcher do this, because any of them can be the one
+/// to notice. A dropped link
 /// does not always end the notification stream — BlueZ can leave it open — and
 /// then only the failing write knows. Without this the daemon publishes into a
 /// dead connection once a minute forever, logging success every time.
